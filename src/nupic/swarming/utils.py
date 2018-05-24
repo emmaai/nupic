@@ -385,7 +385,7 @@ def runModelGivenBaseAndParams(modelID, jobID, baseDescription, params,
 
     # Create the decription.py from the overrides in params
     paramsFilePath = os.path.join(experimentDir, 'description.py')
-    paramsFile = open(paramsFilePath, 'wb')
+    paramsFile = open(paramsFilePath, 'w')
     paramsFile.write(_paramsFileHead())
 
     items = list(params.items())
@@ -403,7 +403,7 @@ def runModelGivenBaseAndParams(modelID, jobID, baseDescription, params,
 
 
     # Write out the base description
-    baseParamsFile = open(os.path.join(experimentDir, 'base.py'), 'wb')
+    baseParamsFile = open(os.path.join(experimentDir, 'base.py'), 'w')
     baseParamsFile.write(baseDescription)
     baseParamsFile.close()
 
@@ -655,7 +655,7 @@ def clippedObj(obj, maxElementSize=64):
       objOut[key] = clippedObj(val)
 
   # Printing a list?
-  elif hasattr(obj, '__iter__'):
+  elif isinstance(obj, list):
     objOut = []
     for val in obj:
       objOut.append(clippedObj(val))
@@ -728,6 +728,15 @@ def loadJsonValueFromFile(inputFilePath):
   return value
 
 
+def sorted_json_dump(obj):
+    if isinstance(obj, dict):
+        return "{" + (", ".join("{}: {}".format(key, sorted_json_dump(obj[key]))
+                      for key in sorted(obj.keys()))) + "}"
+    if isinstance(obj, list):
+        return "[{}]".format(", ".join(sorted_json_dump(elem) for elem in obj))
+    else:
+        return json.dumps(obj)
+
 
 def sortedJSONDumpS(obj):
   """
@@ -746,7 +755,7 @@ def sortedJSONDumpS(obj):
       itemStrs.append('%s: %s' % (json.dumps(key), sortedJSONDumpS(value)))
     return '{%s}' % (', '.join(itemStrs))
 
-  elif hasattr(obj, '__iter__'):
+  elif isinstance(obj, list):
     for val in obj:
       itemStrs.append(sortedJSONDumpS(val))
     return '[%s]' % (', '.join(itemStrs))

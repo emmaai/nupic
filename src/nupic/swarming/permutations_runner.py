@@ -1001,12 +1001,12 @@ class _HyperSearchRunner(object):
         description = description.replace(
               "importBaseDescription('base.py', config)",
               "importBaseDescription('%s', config)" % base_description_relpath)
-        fd = open(os.path.join(outDir, "description.py"), "wb")
+        fd = open(os.path.join(outDir, "description.py"), "w")
         fd.write(description)
         fd.close()
 
         # Generate a csv file with the parameter settings in it
-        fd = open(os.path.join(outDir, "params.csv"), "wb")
+        fd = open(os.path.join(outDir, "params.csv"), "w")
         writer = csv.writer(fd)
         colNames = list(paramLabels.keys())
         colNames.sort()
@@ -1020,7 +1020,7 @@ class _HyperSearchRunner(object):
         mod = imp.load_source("description", os.path.join(outDir,
                                                           "description.py"))
         model_description = mod.descriptionInterface.getModelDescription()
-        fd = open(os.path.join(outDir, "model_params.py"), "wb")
+        fd = open(os.path.join(outDir, "model_params.py"), "w")
         fd.write("%s\nMODEL_PARAMS = %s" % (getCopyrightHead(),
                                             pprint.pformat(model_description)))
         fd.close()

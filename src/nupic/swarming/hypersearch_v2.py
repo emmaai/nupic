@@ -1015,7 +1015,7 @@ class HypersearchV2(object):
       self._basePath = os.path.dirname(permutationsScript)
       self._baseDescription = open(os.path.join(self._basePath,
                                                'description.py')).read()
-      self._baseDescriptionHash = hashlib.md5(self._baseDescription).digest()
+      self._baseDescriptionHash = hashlib.md5(self._baseDescription.encode('utf-8')).digest()
 
       # Read the model config to figure out the inference type
       modelDescription, _ = helpers.loadExperiment(self._basePath)
@@ -2252,13 +2252,13 @@ class HypersearchV2(object):
 
         # And the hashes.
         m = hashlib.md5()
-        m.update(sortedJSONDumpS(structuredParams))
+        #m.update(sortedJSONDumpS(structuredParams))
         m.update(self._baseDescriptionHash)
         paramsHash = m.digest()
 
         particleInst = "%s.%s" % (modelParams['particleState']['id'],
                                   modelParams['particleState']['genIdx'])
-        particleHash = hashlib.md5(particleInst).digest()
+        particleHash = hashlib.md5(particleInst.encode("utf-8")).digest()
 
         # Increase attempt counter
         numAttempts += 1

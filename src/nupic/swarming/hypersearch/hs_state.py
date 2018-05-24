@@ -697,7 +697,7 @@ class HsState(object):
     activeSwarms.extend(self.getCompletingSwarms())
     activeSwarms = [(swarm, self._state["swarms"][swarm],
                      self._state["swarms"][swarm]["bestErrScore"]) \
-                                                for swarm in activeSwarms]
+                                                for swarm in activeSwarms if self._state["swarms"][swarm]["bestErrScore"] is not None]
 
     # Form the activeMatrix. Each row corresponds to a sprint. Each row
     #  contains the list of swarm tuples that belong to that sprint, sorted
@@ -899,7 +899,7 @@ class HsState(object):
         # Grab the top maxBranching base sprint swarms.
         swarms = self._state["swarms"]
         sprintSwarms = [(swarm, swarms[swarm]["bestErrScore"]) \
-            for swarm in swarms if swarms[swarm]["sprintIdx"] == baseSprintIdx]
+            for swarm in swarms if swarms[swarm]["sprintIdx"] == baseSprintIdx and swarms[swarm]["bestErrScore"] is not None]
         sprintSwarms = sorted(sprintSwarms, key=itemgetter(1))
         if self._hsObj._maxBranching > 0:
           sprintSwarms = sprintSwarms[0:self._hsObj._maxBranching]

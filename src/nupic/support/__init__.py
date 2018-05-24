@@ -364,6 +364,8 @@ def initLogging(verbose=False, console='stdout', consoleLevel='DEBUG'):
   loggingFileContents = resource_string(__name__, configFilename)
 
   for lineNum, line in enumerate(loggingFileContents.splitlines()):
+    line = line.decode("utf-8")
+    print("line", line)
     if "$$" in line:
       for (key, value) in list(replacements.items()):
         line = line.replace(key, value)

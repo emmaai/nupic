@@ -400,7 +400,10 @@ def _generateFileFromTemplates(templateFileNames, outputFilePath,
     for k, v in replacementDict.items():
       if v is None:
         v = "None"
-      tempLine = re.sub(k, v, tempLine)
+      if ("_W_TIMESTAMPS" in tempLine):
+        tempLine = re.sub("^"+k+"$", v, tempLine)
+      else:
+        tempLine = re.sub(k, v, tempLine)
     outputFile.write(tempLine)
   outputFile.close()
 
@@ -1456,6 +1459,7 @@ def _generateExperiment(options, outputDirPath, hsVersion,
                 (options['tryAll3FieldCombinationsWTimestamps'])
   else:
     tokenReplacements['\$PERM_TRY_ALL_3_FIELD_COMBINATIONS_W_TIMESTAMPS'] = ""
+
 
 
   # The Permutations fieldFields setting

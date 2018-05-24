@@ -28,6 +28,10 @@ $EXP_GENERATOR_PROGRAM_PATH
 """
 
 import os
+import sys
+import nupic
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from nupic.swarming.permutation_helpers import *
 

@@ -854,7 +854,7 @@ class HTMPredictionModel(Model):
       # relative likelihoods for each bucket. Let's find the max one
       # and then look up the actual value from that bucket index
       likelihoodsVec = clResults[steps]
-      bucketValues = clResults['actualValues']
+      bucketValues = clResults[b'actualValues']
 
       # Create a dict of value:likelihood pairs. We can't simply use
       #  dict(zip(bucketValues, likelihoodsVec)) because there might be

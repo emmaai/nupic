@@ -65,7 +65,7 @@
 
 <property>
   <name>nupic.cluster.database.host</name>
-  <value>localhost</value>
+  <value>35.197.188.29</value>
   <description>Name of the machine running the MySQL database server</description>
 </property>
 
@@ -83,7 +83,7 @@
 
 <property>
   <name>nupic.cluster.database.passwd</name>
-  <value></value>
+  <value>acs12345</value>
   <description>Password for the MySQL database server </description>
 </property>
 

@@ -30,6 +30,9 @@ import hashlib
 import itertools
 import io
 import traceback
+import nupic
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from nupic.support import initLogging
 from nupic.support.configuration import Configuration
@@ -284,6 +287,7 @@ class HypersearchWorker(object):
            useConnectionID=False,
            ignoreUnchanged=True)
     jobInfo = cjDAO.jobInfo(options.jobID)
+    print("jobInfo", options.jobID)
     self.logger.info("Job info retrieved: %s" % (str(clippedObj(jobInfo))))
 
 
@@ -368,8 +372,8 @@ class HypersearchWorker(object):
                 self.logger.info("Adding model %d to our internal DB " \
                       "because modelInsertAndStart() failed to insert it: " \
                       "paramsHash=%s, particleHash=%s, particleId='%s'", modelID,
-                      mParamsAndHash.engParamsHash.encode('hex'),
-                      particleHash.encode('hex'), particleInst)
+                      mParamsAndHash.engParamsHash,
+                      particleHash, particleInst)
                 self._hs.recordModelProgress(modelID = modelID,
                       modelParams = modelParams,
                       modelParamsHash = mParamsAndHash.engParamsHash,
@@ -428,7 +432,7 @@ class HypersearchWorker(object):
 
         # Run the model now
         self.logger.info("RUNNING MODEL GID=%d, paramsHash=%s, params=%s",
-              modelIDToRun, modelParamsHash.encode('hex'), modelParams)
+              modelIDToRun, modelParamsHash, modelParams)
 
         # ---------------------------------------------------------------------
         # Construct model checkpoint GUID for this model:

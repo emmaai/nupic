@@ -2365,8 +2365,8 @@ class ClientJobsDAO(object):
           # intermittent failure may have caused us to retry
           self._logger.info('Model insert attempt failed with DUP_ENTRY: '
                             'jobID=%s; paramsHash=%s OR particleHash=%s; %r',
-                            jobID, paramsHash.encode('hex'),
-                            particleHash.encode('hex'), e)
+                            jobID, paramsHash,
+                            particleHash, e)
         else:
           if numRowsAffected == 1:
             # NOTE: SELECT LAST_INSERT_ID() returns 0 after re-connection

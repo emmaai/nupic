@@ -216,7 +216,7 @@ class RandomDistributedScalarEncoder(Encoder):
     elif bucketIdx >= self._maxBuckets:
       bucketIdx = self._maxBuckets-1
 
-    return [bucketIdx]
+    return [int(bucketIdx)]
 
 
   def mapBucketIndexToNonZeroBits(self, index):
@@ -297,7 +297,7 @@ class RandomDistributedScalarEncoder(Encoder):
     # this bit deterministically. If this is always chosen randomly then there
     # is a 1 in w chance of the same bit being replaced in neighboring
     # representations, which is fairly high
-    ri = newIndex % self.w
+    ri = int(newIndex) % self.w
 
     # Now we choose a bit such that the overlap rules are satisfied.
     newBit = self.random.getUInt32(self.n)
@@ -327,7 +327,7 @@ class RandomDistributedScalarEncoder(Encoder):
     newRepBinary[newRep] = True
 
     # Midpoint
-    midIdx = self._maxBuckets/2
+    midIdx = int(self._maxBuckets/2)
 
     # Start by checking the overlap at minIndex
     runningOverlap = self._countOverlap(self.bucketMap[self.minIndex], newRep)
@@ -422,8 +422,8 @@ class RandomDistributedScalarEncoder(Encoder):
     # indices must be non-negative. This normally does not need to be changed
     # but if altered, should be set to an even number.
     self._maxBuckets = maxBuckets
-    self.minIndex = self._maxBuckets / 2
-    self.maxIndex = self._maxBuckets / 2
+    self.minIndex = int(self._maxBuckets / 2)
+    self.maxIndex = int(self._maxBuckets / 2)
 
     # The scalar offset used to map scalar values to bucket indices. The middle
     # bucket will correspond to numbers in the range

@@ -71,8 +71,7 @@ class FieldMetaInfo(FieldMetaInfoBase):
 
     if not FieldMetaSpecial.isValid(special):
       raise ValueError('Unexpected field special attribute %r' % (special,))
-
-    super(FieldMetaInfo, self).__init__(name, type, special)
+    super(FieldMetaInfo, self).__init__()
 
 
   @staticmethod
