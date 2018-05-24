@@ -26,6 +26,9 @@ import importlib
 import sys
 import csv
 import datetime
+import nupic
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from nupic.data.inference_shifter import InferenceShifter
 from nupic.frameworks.opf.metrics import MetricSpec
@@ -75,7 +78,7 @@ def getModelParamsFromName(gymName):
   importName = "model_params.%s_model_params" % (
     gymName.replace(" ", "_").replace("-", "_")
   )
-  print "Importing model params from %s" % importName
+  print("Importing model params from %s" % importName)
   try:
     importedModelParams = importlib.import_module(importName).MODEL_PARAMS
   except ImportError:
@@ -86,12 +89,12 @@ def getModelParamsFromName(gymName):
 
 
 def runIoThroughNupic(inputData, model, gymName, plot):
-  inputFile = open(inputData, "rb")
+  inputFile = open(inputData, "r")
   csvReader = csv.reader(inputFile)
   # skip header rows
-  csvReader.next()
-  csvReader.next()
-  csvReader.next()
+  next(csvReader)
+  next(csvReader)
+  next(csvReader)
 
   shifter = InferenceShifter()
   if plot:
@@ -114,11 +117,11 @@ def runIoThroughNupic(inputData, model, gymName, plot):
     result.metrics = metricsManager.update(result)
 
     if counter % 100 == 0:
-      print "Read %i lines..." % counter
-      print ("After %i records, 1-step altMAPE=%f" % (counter,
+      print("Read %i lines..." % counter)
+      print(("After %i records, 1-step altMAPE=%f" % (counter,
               result.metrics["multiStepBestPredictions:multiStep:"
                              "errorMetric='altMAPE':steps=1:window=1000:"
-                             "field=kw_energy_consumption"]))
+                             "field=kw_energy_consumption"])))
 
     if plot:
       result = shifter.shift(result)
@@ -135,7 +138,7 @@ def runIoThroughNupic(inputData, model, gymName, plot):
 
 
 def runModel(gymName, plot=False):
-  print "Creating model from %s..." % gymName
+  print("Creating model from %s..." % gymName)
   model = createModel(getModelParamsFromName(gymName))
   inputData = "%s/%s.csv" % (DATA_DIR, gymName.replace(" ", "_"))
   runIoThroughNupic(inputData, model, gymName, plot)
@@ -143,7 +146,7 @@ def runModel(gymName, plot=False):
 
 
 if __name__ == "__main__":
-  print DESCRIPTION
+  print(DESCRIPTION)
   plot = False
   args = sys.argv[1:]
   if "--plot" in args:

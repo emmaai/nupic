@@ -28,6 +28,10 @@ score.
 import csv
 import datetime
 import logging
+import sys
+import nupic
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from pkg_resources import resource_filename
 
@@ -38,7 +42,7 @@ import model_params
 _LOGGER = logging.getLogger(__name__)
 
 _INPUT_DATA_FILE = resource_filename(
-  "nupic.datafiles", "extra/nyctaxi/nycTaxi.csv"
+  "nupic.datafiles", "extra/nycTaxi/nycTaxi.csv"
 )
 _OUTPUT_PATH = "anomaly_scores.csv"
 
@@ -80,11 +84,11 @@ def runNYCTaxiAnomaly():
   model.enableInference({'predictedField': 'value'})
   with open (_INPUT_DATA_FILE) as fin:
     reader = csv.reader(fin)
-    csvWriter = csv.writer(open(_OUTPUT_PATH,"wb"))
+    csvWriter = csv.writer(open(_OUTPUT_PATH,"w"))
     csvWriter.writerow(["timestamp", "value", "anomaly_score"])
-    headers = reader.next()
+    headers = next(reader)
     for i, record in enumerate(reader, start=1):
-      modelInput = dict(zip(headers, record))
+      modelInput = dict(list(zip(headers, record)))
       modelInput["value"] = float(modelInput["value"])
       modelInput["timestamp"] = datetime.datetime.strptime(
           modelInput["timestamp"], "%Y-%m-%d %H:%M:%S")
@@ -96,7 +100,7 @@ def runNYCTaxiAnomaly():
         _LOGGER.info("Anomaly detected at [%s]. Anomaly score: %f.",
                       result.rawInput["timestamp"], anomalyScore)
 
-  print "Anomaly scores have been written to",_OUTPUT_PATH
+  print("Anomaly scores have been written to",_OUTPUT_PATH)
 
 if __name__ == "__main__":
   logging.basicConfig(level=logging.INFO)

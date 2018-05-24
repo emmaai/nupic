@@ -24,6 +24,10 @@ Groups together the code dealing with swarming.
 """
 import os
 import pprint
+import nupic
+import sys
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 # add logging to output errors to stdout
 import logging
@@ -59,7 +63,7 @@ def writeModelParamsToFile(modelParams, name):
   initPath = os.path.join(outDir, '__init__.py')
   open(initPath, 'a').close()
   outPath = os.path.join(os.getcwd(), 'model_params', paramsName)
-  with open(outPath, "wb") as outFile:
+  with open(outPath, "w") as outFile:
     modelParamsString = modelParamsToString(modelParams)
     outFile.write("MODEL_PARAMS = \\\n%s" % modelParamsString)
   return outPath
@@ -86,26 +90,26 @@ def swarmForBestModelParams(swarmConfig, name, maxWorkers=4):
 
 def printSwarmSizeWarning(size):
   if size is "small":
-    print "= THIS IS A DEBUG SWARM. DON'T EXPECT YOUR MODEL RESULTS TO BE GOOD."
+    print("= THIS IS A DEBUG SWARM. DON'T EXPECT YOUR MODEL RESULTS TO BE GOOD.")
   elif size is "medium":
-    print "= Medium swarm. Sit back and relax, this could take awhile."
+    print("= Medium swarm. Sit back and relax, this could take awhile.")
   else:
-    print "= LARGE SWARM! Might as well load up the Star Wars Trilogy."
+    print("= LARGE SWARM! Might as well load up the Star Wars Trilogy.")
 
 
 
 def swarm(filePath):
   name = os.path.splitext(os.path.basename(filePath))[0]
-  print "================================================="
-  print "= Swarming on %s data..." % name
+  print("=================================================")
+  print("= Swarming on %s data..." % name)
   printSwarmSizeWarning(SWARM_DESCRIPTION["swarmSize"])
-  print "================================================="
+  print("=================================================")
   modelParams = swarmForBestModelParams(SWARM_DESCRIPTION, name)
-  print "\nWrote the following model param files:"
-  print "\t%s" % modelParams
+  print("\nWrote the following model param files:")
+  print("\t%s" % modelParams)
 
 
 
 if __name__ == "__main__":
-  print DESCRIPTION
+  print(DESCRIPTION)
   swarm(INPUT_FILE)

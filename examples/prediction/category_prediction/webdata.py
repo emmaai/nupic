@@ -162,27 +162,27 @@ def computeAccuracy(model, size, top):
   with zipfile.ZipFile(filename) as archive:
     with archive.open("msnbc990928.seq") as datafile:
       # Skip header lines (first 7 lines)
-      for _ in xrange(7):
+      for _ in range(7):
         next(datafile)
 
       # Skip learning data and compute accuracy using only new sessions
-      for _ in xrange(LEARNING_RECORDS):
+      for _ in range(LEARNING_RECORDS):
         next(datafile)
 
       # Compute prediction accuracy by checking if the next page in the sequence
       # is within the top N predictions calculated by the model
-      for _ in xrange(size):
+      for _ in range(size):
         pages = readUserSession(datafile)
         model.resetSequenceStates()
-        for i in xrange(len(pages) - 1):
+        for i in range(len(pages) - 1):
           result = model.run({"page": pages[i]})
           inferences = result.inferences["multiStepPredictions"][1]
 
           # Get top N predictions for the next page
-          predicted = sorted(inferences.items(), key=itemgetter(1), reverse=True)[:top]
+          predicted = sorted(list(inferences.items()), key=itemgetter(1), reverse=True)[:top]
 
           # Check if the next page is within the predicted pages
-          accuracy.append(1 if pages[i + 1] in zip(*predicted)[0] else 0)
+          accuracy.append(1 if pages[i + 1] in list(zip(*predicted))[0] else 0)
 
   return np.mean(accuracy)
 
@@ -231,9 +231,9 @@ def main():
     encoder.encodeIntoArray({"page": page}, sdrout)
     sdr_table.add_row([page, sdrout.nonzero()[0]])
 
-  print "The following table shows the encoded SDRs for every page " \
-        "category in the dataset"
-  print sdr_table
+  print("The following table shows the encoded SDRs for every page " \
+        "category in the dataset")
+  print(sdr_table)
 
   # At this point our model is configured and ready to learn the user sessions
   # Extract the learning data from MSNBC archive and stream it to the model
@@ -241,14 +241,14 @@ def main():
   with zipfile.ZipFile(filename) as archive:
     with archive.open("msnbc990928.seq") as datafile:
       # Skip header lines (first 7 lines)
-      for _ in xrange(7):
+      for _ in range(7):
         next(datafile)
 
-      print
-      print "Start learning page sequences using the first {} user " \
-            "sessions".format(LEARNING_RECORDS)
+      print()
+      print("Start learning page sequences using the first {} user " \
+            "sessions".format(LEARNING_RECORDS))
       model.enableLearning()
-      for count in xrange(LEARNING_RECORDS):
+      for count in range(LEARNING_RECORDS):
         # Learn each user session as a single sequence
         session = readUserSession(datafile)
         model.resetSequenceStates()
@@ -259,13 +259,13 @@ def main():
         sys.stdout.write("\rLearned {} Sessions".format(count + 1))
         sys.stdout.flush()
 
-      print "\nFinished learning"
+      print("\nFinished learning")
       model.disableLearning()
 
       # Use the new HTM model to predict next user session
       # The test data starts right after the learning data
-      print
-      print "Start Inference using a new user session from the dataset"
+      print()
+      print("Start Inference using a new user session from the dataset")
       prediction_table = PrettyTable(field_names=["Page", "Prediction"],
                                      hrules=prettytable.ALL)
       prediction_table.align["Prediction"] = "l"
@@ -278,21 +278,21 @@ def main():
         inferences = result.inferences["multiStepPredictions"][1]
 
         # Print predictions ordered by probabilities
-        predicted = sorted(inferences.items(),
+        predicted = sorted(list(inferences.items()),
                            key=itemgetter(1),
                            reverse=True)
-        prediction_table.add_row([page, zip(*predicted)[0]])
+        prediction_table.add_row([page, list(zip(*predicted))[0]])
 
-      print "User Session to Predict: ", session
-      print prediction_table
+      print("User Session to Predict: ", session)
+      print(prediction_table)
 
-  print
-  print "Compute prediction accuracy by checking if the next page in the " \
-        "sequence is within the predicted pages calculated by the model:"
+  print()
+  print("Compute prediction accuracy by checking if the next page in the " \
+        "sequence is within the predicted pages calculated by the model:")
   accuracy = computeAccuracy(model, 100, 1)
-  print " - Prediction Accuracy:", accuracy
+  print(" - Prediction Accuracy:", accuracy)
   accuracy = computeAccuracy(model, 100, 3)
-  print " - Accuracy Predicting Top 3 Pages:", accuracy
+  print(" - Accuracy Predicting Top 3 Pages:", accuracy)
 
 
 

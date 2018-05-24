@@ -26,6 +26,11 @@ import datetime
 import logging
 
 from pkg_resources import resource_filename
+import sys
+import nupic
+
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from nupic.frameworks.opf.metrics import MetricSpec
 from nupic.frameworks.opf.model_factory import ModelFactory
@@ -70,11 +75,11 @@ def runHotgym():
                                   model.getInferenceType())
   with open (_INPUT_FILE_PATH) as fin:
     reader = csv.reader(fin)
-    headers = reader.next()
-    reader.next()
-    reader.next()
+    headers = next(reader)
+    next(reader)
+    next(reader)
     for i, record in enumerate(reader, start=1):
-      modelInput = dict(zip(headers, record))
+      modelInput = dict(list(zip(headers, record)))
       modelInput["consumption"] = float(modelInput["consumption"])
       modelInput["timestamp"] = datetime.datetime.strptime(
           modelInput["timestamp"], "%m/%d/%y %H:%M")

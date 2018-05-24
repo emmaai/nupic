@@ -27,6 +27,9 @@ import os
 import optparse
 import logging
 logging.basicConfig()
+import nupic
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from nupic.swarming import permutations_runner
 from nupic.swarming.permutations_runner import DEFAULT_OPTIONS
