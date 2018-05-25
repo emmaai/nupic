@@ -2252,7 +2252,7 @@ class HypersearchV2(object):
 
         # And the hashes.
         m = hashlib.md5()
-        #m.update(sortedJSONDumpS(structuredParams))
+        m.update(sortedJSONDumpS(structuredParams).encode('utf-8'))
         m.update(self._baseDescriptionHash)
         paramsHash = m.digest()
 

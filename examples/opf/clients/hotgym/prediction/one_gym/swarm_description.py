@@ -46,7 +46,7 @@ SWARM_DESCRIPTION = {
     ]
   },
 
-  "inferenceType": "TemporalMultiStep",
+  "inferenceType": "MultiStep",
   "inferenceArgs": {
     "predictionSteps": [
       1

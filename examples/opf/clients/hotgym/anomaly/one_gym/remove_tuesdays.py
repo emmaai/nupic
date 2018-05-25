@@ -20,7 +20,7 @@ def withinOctober(date):
 def run():
   # Backup original
   shutil.copyfile(ORIGINAL, BACKUP)
-  with open(ORIGINAL, 'rb') as inputFile:
+  with open(ORIGINAL, 'r') as inputFile:
     reader = csv.reader(inputFile)
     outputCache = ""
     headers = next(reader)
@@ -38,7 +38,7 @@ def run():
         consumption = 5.0
       outputCache += "%s,%f\n" % (dateString, consumption)
 
-  with open(ORIGINAL, 'wb') as outputFile:
+  with open(ORIGINAL, 'w') as outputFile:
     outputFile.write(outputCache)
 
 

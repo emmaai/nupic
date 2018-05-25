@@ -87,6 +87,8 @@ def _loadDescriptionFile(descriptionPyPath):
   if not os.path.isfile(descriptionPyPath):
     raise RuntimeError(("Experiment description file %s does not exist or " + \
                         "is not a file") % (descriptionPyPath,))
+  print("emma", descriptionPyPath)
+  print("emma", g_descriptionImportCount)
   mod = imp.load_source("pf_description%d" % g_descriptionImportCount,
                         descriptionPyPath)
   g_descriptionImportCount += 1

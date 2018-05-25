@@ -26,6 +26,9 @@ import importlib
 import sys
 import csv
 import datetime
+import nupic
+nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
+nupic.__path__ = nupic_path
 
 from nupic.data.inference_shifter import InferenceShifter
 from nupic.frameworks.opf.model_factory import ModelFactory
@@ -89,7 +92,7 @@ def runIoThroughNupic(inputData, model, gymName, plot):
   :param gymName: Gym name, used for output handler naming
   :param plot: Whether to use matplotlib or not. If false, uses file output.
   """
-  inputFile = open(inputData, "rb")
+  inputFile = open(inputData, "r")
   csvReader = csv.reader(inputFile)
   # skip header rows
   next(csvReader)
