@@ -1161,6 +1161,7 @@ def _generateExperiment(options, outputDirPath, hsVersion,
       options["inferenceArgs"]["inputPredictedField"] = "yes"
 
   elif swarmSize == 'medium':
+    options['tryAll3FieldCombinationsWTimestamps'] = True
     if options['minParticlesPerSwarm'] is None:
       options['minParticlesPerSwarm'] = 5
     if options['iterationCount'] is None:
@@ -1701,6 +1702,7 @@ def _generateMetricSpecs(options):
     predictedFieldName, predictedFieldType = _getPredictedField(options)
     isCategory = _isCategory(predictedFieldType)
     metricNames = ('avg_err',) if isCategory else ('aae', 'altMAPE')
+    #metricNames = ('avg_err',) if isCategory else ('altMAPE','aae')
     trivialErrorMetric = 'avg_err' if isCategory else 'altMAPE'
     oneGramErrorMetric = 'avg_err' if isCategory else 'altMAPE'
     movingAverageBaselineName = 'moving_mode' if isCategory else 'moving_mean'

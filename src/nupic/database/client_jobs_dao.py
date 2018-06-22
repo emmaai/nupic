@@ -29,11 +29,14 @@ from optparse import OptionParser
 import sys
 import traceback
 import uuid
+import os
+from subprocess import call
+import psycopg2
 
 from nupic.support.decorators import logExceptions #, logEntryExit
 from nupic.database.connection import ConnectionFactory
 from nupic.support.configuration import Configuration
-from nupic.support import pymysql_helpers
+from nupic.support import psycopg2_helper
 
 
 _MODULE_NAME = "nupic.database.ClientJobsDAO"
@@ -55,7 +58,7 @@ class InvalidConnectionException(Exception):
 #  insertions, etc.
 # NOTE: having this as a global permits us to switch parameters wholesale (e.g.,
 #  timeout)
-g_retrySQL = pymysql_helpers.retrySQL(logger=_LOGGER)
+g_retrySQL = psycopg2_helper.retrySQL(logger=_LOGGER)
 
 
 
@@ -106,7 +109,7 @@ class ClientJobsDAO(object):
   evaluates.
 
   Jobs table. The field names are given as:
-      internal mysql field name (public API field name)
+      internal postgres field name (public API field name)
 
   field     description
   ---------------------------------------------------------------------------
@@ -572,10 +575,10 @@ class ClientJobsDAO(object):
     # NOTE: we set the table names here; the rest of the table info is set when
     #  the tables are initialized during connect()
     self._jobs = self._JobsTableInfo()
-    self._jobs.tableName = '%s.jobs' % (self.dbName)
+    self._jobs.tableName = 'jobs'
 
     self._models = self._ModelsTableInfo()
-    self._models.tableName = '%s.models' % (self.dbName)
+    self._models.tableName = 'models'
 
     # Our connection ID, filled in during connect()
     self._connectionID = None
@@ -632,11 +635,12 @@ class ClientJobsDAO(object):
     # Initialize tables, if needed
     with ConnectionFactory.get() as conn:
       # Initialize tables
-      self._initTables(cursor=conn.cursor, deleteOldVersions=deleteOldVersions,
+      self._initTables(conn=conn,deleteOldVersions=deleteOldVersions,
                        recreate=recreate)
 
       # Save our connection id
-      conn.cursor.execute('SELECT CONNECTION_ID()')
+      conn.cursor.execute('CREATE SEQUENCE IF NOT EXISTS connectionids START WITH 10000')
+      conn.cursor.execute("SELECT nextval('connectionids')")
       self._connectionID = conn.cursor.fetchall()[0][0]
       self._logger.info("clientJobsConnectionID=%r", self._connectionID)
 
@@ -644,7 +648,7 @@ class ClientJobsDAO(object):
 
 
   @logExceptions(_LOGGER)
-  def _initTables(self, cursor, deleteOldVersions, recreate):
+  def _initTables(self, conn, deleteOldVersions, recreate):
     """ Initialize tables, if needed
 
     Parameters:
@@ -655,31 +659,31 @@ class ClientJobsDAO(object):
     recreate:            if true, recreate the database from scratch even
                           if it already exists.
     """
+    host = Configuration.get('nupic.cluster.database.host')
+    user = Configuration.get('nupic.cluster.database.user')
+    password = Configuration.get('nupic.cluster.database.passwd')
+    port = Configuration.get('nupic.cluster.database.port')
 
     # Delete old versions if they exist
     if deleteOldVersions:
       self._logger.info(
         "Dropping old versions of client_jobs DB; called from: %r",
         traceback.format_stack())
+      os.environ['PGPASSWORD'] = password
       for i in range(self._DB_VERSION):
-        cursor.execute('DROP DATABASE IF EXISTS %s' %
-                              (self.__getDBNameForVersion(i),))
+        command = 'DROP DATABASE IF EXISTS %s' % (self.__getDBNameForVersion(i))
+        call(['psql','-U', user,  '-d', 'postgres', '-h', host, '-p', port, '-c', command])
 
     # Create the database if necessary
     if recreate:
       self._logger.info(
-        "Dropping client_jobs DB %r; called from: %r",
+        "Can't drop client_jobs DB %r; called from: %r",
         self.dbName, traceback.format_stack())
-      cursor.execute('DROP DATABASE IF EXISTS %s' % (self.dbName))
-
-    cursor.execute('CREATE DATABASE IF NOT EXISTS %s' % (self.dbName))
-
 
     # Get the list of tables
-    cursor.execute('SHOW TABLES IN %s' % (self.dbName))
-    output = cursor.fetchall()
+    conn.cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+    output = conn.cursor.fetchall()
     tableNames = [x[0] for x in output]
-
     # ------------------------------------------------------------------------
     # Create the jobs table if it doesn't exist
     # Fields that start with '_eng' are intended for private use by the engine
@@ -687,119 +691,120 @@ class ClientJobsDAO(object):
     if 'jobs' not in tableNames:
       self._logger.info("Creating table %r", self.jobsTableName)
       fields = [
-        'job_id                  INT UNSIGNED NOT NULL AUTO_INCREMENT',
+        "job_id                  SERIAL",
             # unique jobID
-        'client                  CHAR(%d)' % (self.CLIENT_MAX_LEN),
+        "client                  CHAR(%d)" % (self.CLIENT_MAX_LEN),
             # name of client (UI, StrmMgr, etc.)
-        'client_info             LONGTEXT',
+        "client_info             TEXT",
             # Arbitrary data defined by the client
-        'client_key             varchar(255)',
+        "client_key             varchar(255)",
             # Foreign key as defined by the client.
-        'cmd_line                LONGTEXT',
+        "cmd_line                TEXT",
             # command line to use to launch each worker process
-        'params                  LONGTEXT',
+
+        "params                  TEXT",
             # JSON encoded params for the job, for use by the worker processes
-        'job_hash                BINARY(%d) DEFAULT NULL' % (self.HASH_MAX_LEN),
+        "job_hash                BYTEA DEFAULT NULL",
             # unique hash of the job, provided by the client. Used for detecting
             # identical job requests from the same client when they use the
             # jobInsertUnique() method.
-        'status                  VARCHAR(16) DEFAULT "notStarted"',
+        "status                  VARCHAR(16) DEFAULT 'notStarted'",
             # One of the STATUS_XXX enumerated value strings
-        'completion_reason       VARCHAR(16)',
+        "completion_reason       VARCHAR(16)",
             # One of the CMPL_REASON_XXX enumerated value strings.
             # NOTE: This is the job completion reason according to the hadoop
             # job-tracker. A success here does not necessarily mean the
             # workers were "happy" with the job. To see if the workers
             # failed, check the worker_completion_reason
-        'completion_msg          LONGTEXT',
+        "completion_msg          TEXT",
             # Why this job completed, according to job-tracker
-        'worker_completion_reason   VARCHAR(16) DEFAULT "%s"'  % \
+        "worker_completion_reason   VARCHAR(16) DEFAULT '%s'"  % \
                   self.CMPL_REASON_SUCCESS,
             # One of the CMPL_REASON_XXX enumerated value strings. This is
             # may be changed to CMPL_REASON_ERROR if any workers encounter
             # an error while running the job.
-        'worker_completion_msg   LONGTEXT',
+        "worker_completion_msg   TEXT",
             # Why this job completed, according to workers. If
             # worker_completion_reason is set to CMPL_REASON_ERROR, this will
             # contain the error information.
-        'cancel                  BOOLEAN DEFAULT FALSE',
+        "cancel                  BOOLEAN DEFAULT FALSE",
             # set by UI, polled by engine
-        'start_time              DATETIME DEFAULT NULL',
+        "start_time              TIMESTAMP DEFAULT NULL",
             # When job started
-        'end_time                DATETIME DEFAULT NULL',
+        "end_time                TIMESTAMP DEFAULT NULL",
             # When job ended
-        'results                 LONGTEXT',
+        "results                 TEXT",
             # JSON dict with general information about the results of the job,
             # including the ID and value of the best model
             # TODO: different semantics for results field of ProductionJob
-        '_eng_job_type           VARCHAR(32)',
+        "_eng_job_type           VARCHAR(32)",
             # String used to specify the type of job that this is. Current
             # choices are hypersearch, production worker, or stream worker
-        'minimum_workers         INT UNSIGNED DEFAULT 0',
+        "minimum_workers         INT DEFAULT 0",
             # min number of desired workers at a time. If 0, no workers will be
             # allocated in a crunch
-        'maximum_workers         INT UNSIGNED DEFAULT 0',
+        "maximum_workers         INT DEFAULT 0",
             # max number of desired workers at a time. If 0, then use as many
             # as practical given load on the cluster.
-        'priority                 INT DEFAULT %d' % self.DEFAULT_JOB_PRIORITY,
+        "priority                 INT DEFAULT %d" % self.DEFAULT_JOB_PRIORITY,
             # job scheduling priority; 0 is the default priority (
             # ClientJobsDAO.DEFAULT_JOB_PRIORITY); positive values are higher
             # priority (up to ClientJobsDAO.MAX_JOB_PRIORITY), and negative
             # values are lower priority (down to ClientJobsDAO.MIN_JOB_PRIORITY)
-        '_eng_allocate_new_workers    BOOLEAN DEFAULT TRUE',
+        "_eng_allocate_new_workers    BOOLEAN DEFAULT TRUE",
             # Should the scheduling algorithm allocate new workers to this job?
             # If a specialized worker willingly gives up control, we set this
             # field to FALSE to avoid allocating new workers.
-        '_eng_untended_dead_workers   BOOLEAN DEFAULT FALSE',
+        "_eng_untended_dead_workers   BOOLEAN DEFAULT FALSE",
             # If a specialized worker fails or is killed by the scheduler, we
             # set this feild to TRUE to indicate that the worker is dead
-        'num_failed_workers           INT UNSIGNED DEFAULT 0',
+        "num_failed_workers           INT DEFAULT 0",
             # The number of failed specialized workers for this job. If the
             # number of failures is >= max.failed.attempts, we mark the job
             # as failed
-        'last_failed_worker_error_msg  LONGTEXT',
+        "last_failed_worker_error_msg  TEXT",
             # Error message of the most recent specialized failed worker
-        '_eng_cleaning_status          VARCHAR(16) DEFAULT "%s"'  % \
+        "_eng_cleaning_status          VARCHAR(16) DEFAULT '%s'"  % \
                   self.CLEAN_NOT_DONE,
             # Has the job been garbage collected, this includes removing
             # unneeded # model output caches, s3 checkpoints.
-        'gen_base_description    LONGTEXT',
+        "gen_base_description    TEXT",
             # The contents of the generated description.py file from hypersearch
             # requests. This is generated by the Hypersearch workers and stored
             # here for reference, debugging, and development purposes.
-        'gen_permutations        LONGTEXT',
+        "gen_permutations        TEXT",
             # The contents of the generated permutations.py file from
             # hypersearch requests. This is generated by the Hypersearch workers
             # and stored here for reference, debugging, and development
             # purposes.
-        '_eng_last_update_time   DATETIME DEFAULT NULL',
+        "_eng_last_update_time   TIMESTAMP DEFAULT NULL",
             # time stamp of last update, used for detecting stalled jobs
-        '_eng_cjm_conn_id        INT UNSIGNED',
+        "_eng_cjm_conn_id        INT",
             # ID of the CJM starting up this job
-        '_eng_worker_state       LONGTEXT',
+        "_eng_worker_state       TEXT",
             # JSON encoded state of the hypersearch in progress, for private
             # use by the Hypersearch workers
-        '_eng_status             LONGTEXT',
+        "_eng_status             TEXT",
             # String used for status messages sent from the engine for
             # informative purposes only. Usually printed periodically by
             # clients watching a job progress.
-        '_eng_model_milestones   LONGTEXT',
+        "_eng_model_milestones   TEXT",
             # JSon encoded object with information about global model milestone
             # results
 
-        'PRIMARY KEY (job_id)',
-        'UNIQUE INDEX (client, job_hash)',
-        'INDEX (status)',
-        'INDEX (client_key)'
-        ]
-      options = [
-        'AUTO_INCREMENT=1000',
+        "PRIMARY KEY (job_id)",
+        "UNIQUE (client, job_hash)"
+        #"INDEX (status)",
+        #"INDEX (client_key)"
         ]
 
-      query = 'CREATE TABLE IF NOT EXISTS %s (%s) %s' % \
-                (self.jobsTableName, ','.join(fields), ','.join(options))
-
-      cursor.execute(query)
+      query = "CREATE TABLE %s (%s)" % \
+                (self.jobsTableName, ",".join(fields))
+      conn.cursor.execute(query)
+      conn.dbConn.commit()
+      query = "ALTER SEQUENCE %s_job_id_seq RESTART WITH 1000" % (self.jobsTableName)
+      conn.cursor.execute(query)
+      conn.dbConn.commit()
 
 
     # ------------------------------------------------------------------------
@@ -809,88 +814,88 @@ class ClientJobsDAO(object):
     if 'models' not in tableNames:
       self._logger.info("Creating table %r", self.modelsTableName)
       fields = [
-        'model_id                BIGINT UNSIGNED NOT NULL AUTO_INCREMENT',
+        "model_id                BIGSERIAL",
             # globally unique model ID
-        'job_id                  INT UNSIGNED NOT NULL',
+        "job_id                  INT NOT NULL",
             # jobID
-        'params                  LONGTEXT NOT NULL',
+        "params                  TEXT NOT NULL",
             # JSON encoded params for the model
-        'status                  VARCHAR(16) DEFAULT "notStarted"',
+        "status                  VARCHAR(16) DEFAULT 'notStarted'",
             # One of the STATUS_XXX enumerated value strings
-        'completion_reason       VARCHAR(16)',
+        "completion_reason       VARCHAR(16)",
             # One of the CMPL_REASON_XXX enumerated value strings
-        'completion_msg          LONGTEXT',
+        "completion_msg          TEXT",
             # Why this job completed
-        'results                 LONGTEXT DEFAULT NULL',
+        "results                 TEXT DEFAULT NULL",
             # JSON encoded structure containing metrics produced by the model
-        'optimized_metric        FLOAT ',
+        "optimized_metric        FLOAT ",
             #Value of the particular metric we are optimizing in hypersearch
-        'update_counter          INT UNSIGNED DEFAULT 0',
+        "update_counter          INT DEFAULT 0",
             # incremented by engine every time the results is updated
-        'num_records             INT UNSIGNED DEFAULT 0',
+        "num_records             INT DEFAULT 0",
             # number of records processed so far
-        'start_time              DATETIME DEFAULT NULL',
+        "start_time              TIMESTAMP DEFAULT NULL",
             # When this model started being evaluated
-        'end_time                DATETIME DEFAULT NULL',
+        "end_time                TIMESTAMP DEFAULT NULL",
             # When this model completed
-        'cpu_time                FLOAT DEFAULT 0',
+        "cpu_time                FLOAT DEFAULT 0",
             # How much actual CPU time was spent on this model, in seconds. This
             #  excludes time the process spent sleeping, or otherwise not
             #  actually executing code.
-        'model_checkpoint_id     LONGTEXT',
+        "model_checkpoint_id     TEXT",
             # Checkpoint identifier for this model (after it has been saved)
-        'gen_description         LONGTEXT',
+        "gen_description         TEXT",
             # The contents of the generated description.py file from hypersearch
             # requests. This is generated by the Hypersearch workers and stored
             # here for reference, debugging, and development purposes.
-        '_eng_params_hash        BINARY(%d) DEFAULT NULL' % (self.HASH_MAX_LEN),
+        "_eng_params_hash        BYTEA DEFAULT NULL",
             # MD5 hash of the params
-        '_eng_particle_hash      BINARY(%d) DEFAULT NULL' % (self.HASH_MAX_LEN),
+        "_eng_particle_hash      BYTEA DEFAULT NULL",
             # MD5 hash of the particle info for PSO algorithm
-        '_eng_last_update_time   DATETIME DEFAULT NULL',
+        "_eng_last_update_time   TIMESTAMP DEFAULT NULL",
             # time stamp of last update, used for detecting stalled workers
-        '_eng_task_tracker_id    TINYBLOB',
+        "_eng_task_tracker_id    BYTEA",
             # Hadoop Task Tracker ID
-        '_eng_worker_id          TINYBLOB',
+        "_eng_worker_id          BYTEA",
             # Hadoop Map Task ID
-        '_eng_attempt_id         TINYBLOB',
+        "_eng_attempt_id         BYTEA",
             # Hadoop Map task attempt ID
-        '_eng_worker_conn_id     INT DEFAULT 0',
+        "_eng_worker_conn_id     INT DEFAULT 0",
             # database client connection ID of the worker that is running this
             # model
-        '_eng_milestones         LONGTEXT',
+        "_eng_milestones         TEXT",
             # A JSON encoded list of metric values for the model at each
             #  milestone point
-        '_eng_stop               VARCHAR(16) DEFAULT NULL',
+        "_eng_stop               VARCHAR(16) DEFAULT NULL",
             # One of the STOP_REASON_XXX enumerated value strings. Set either by
             # the swarm terminator of either the current, or another
             # Hypersearch worker.
-        '_eng_matured            BOOLEAN DEFAULT FALSE',
+        "_eng_matured            BOOLEAN DEFAULT FALSE",
             # Set by the model maturity-checker when it decides that this model
             #  has "matured". This means that it has reached the point of
             #  not getting better results with more data.
-        'PRIMARY KEY (model_id)',
-        'UNIQUE INDEX (job_id, _eng_params_hash)',
-        'UNIQUE INDEX (job_id, _eng_particle_hash)',
-        ]
-      options = [
-        'AUTO_INCREMENT=1000',
+        "PRIMARY KEY (model_id)",
+        "UNIQUE (job_id, _eng_params_hash)",
+        "UNIQUE (job_id, _eng_particle_hash)",
         ]
 
-      query = 'CREATE TABLE IF NOT EXISTS %s (%s) %s' % \
-              (self.modelsTableName, ','.join(fields), ','.join(options))
-
-      cursor.execute(query)
+      query = "CREATE TABLE %s (%s)" % \
+              (self.modelsTableName, ",".join(fields))
+      conn.cursor.execute(query)
+      conn.dbConn.commit()
+      query = "ALTER SEQUENCE %s_model_id_seq RESTART WITH 1000" % (self.modelsTableName)
+      conn.cursor.execute(query)
+      conn.dbConn.commit()
 
 
     # ---------------------------------------------------------------------
     # Get the field names for each table
-    cursor.execute('DESCRIBE %s' % (self.jobsTableName))
-    fields = cursor.fetchall()
+    conn.cursor.execute("SELECT column_name from information_schema.columns WHERE table_name='%s'" % (self.jobsTableName))
+    fields = conn.cursor.fetchall()
     self._jobs.dbFieldNames = [str(field[0]) for field in fields]
 
-    cursor.execute('DESCRIBE %s' % (self.modelsTableName))
-    fields = cursor.fetchall()
+    conn.cursor.execute("SELECT column_name from information_schema.columns WHERE table_name='%s'" % (self.modelsTableName))
+    fields = conn.cursor.fetchall()
     self._models.dbFieldNames = [str(field[0]) for field in fields]
 
 
@@ -959,26 +964,56 @@ class ClientJobsDAO(object):
 
     # NOTE: make sure match expressions and values are in the same order
     matchPairs = list(fieldsToMatch.items())
-    matchExpressionGen = (
-      p[0] +
-      (' IS ' + {True:'TRUE', False:'FALSE'}[p[1]] if isinstance(p[1], bool)
-       else ' IS NULL' if p[1] is None
-       else ' IN %s' if isinstance(p[1], self._SEQUENCE_TYPES)
-       else '=%s')
-      for p in matchPairs)
-    matchFieldValues = [p[1] for p in matchPairs
-                        if (not isinstance(p[1], (bool)) and p[1] is not None)]
+    
+    sqlParams = []
+
+    
+    def matchExpressionGen():
+        def dumpFieldValues(obj):
+              if isinstance(obj, self._SEQUENCE_TYPES):
+                for val in obj:
+                  dumpFieldValues(val)
+              else:
+                  matchFieldValues.append(obj)
+
+        for p in matchPairs:
+            matchFieldValues = []
+            if isinstance(p[1], bool):
+                yield (p[0] + ' IS ' + {True:'TRUE', False:'FALSE'}[p[1]])
+            elif p[1] is None:
+                yield (p[0] + ' IS NULL')
+            else:
+                dumpFieldValues(p[1])
+                #i = 0
+                #for v in matchFieldValues:
+                #    if isinstance(v, bytes):
+                #        i += 1
+            if len(matchFieldValues) == 1:
+                matchFieldValues = matchFieldValues[0]
+                yield(p[0] + '=%s')
+            else:
+                matchFieldValues = tuple(matchFieldValues)
+                yield(p[0] + ' IN %s')
+            sqlParams.append(matchFieldValues)
 
     query = 'SELECT %s FROM %s WHERE (%s)' % (
       ','.join(selectFieldNames), tableInfo.tableName,
-      ' AND '.join(matchExpressionGen))
-    sqlParams = matchFieldValues
+      ' AND '.join(matchExpressionGen()))
     if maxRows is not None:
       query += ' LIMIT %s'
       sqlParams.append(maxRows)
-
-    conn.cursor.execute(query, sqlParams)
-    rows = conn.cursor.fetchall()
+    try: 
+        conn.cursor.execute(query, sqlParams)
+    except psycopg2.Error as e:
+        # connection closed by the server because it took too long to
+        # return from the function calls, bit strange but anyway shun it
+        # the connection should be acquired as close to the execution as possible
+        print("connection closed by server")
+        with ConnectionFactory.get() as conn:
+            conn.cursor.execute(query, sqlParams)
+            rows = conn.cursor.fetchall()
+    else:
+        rows = conn.cursor.fetchall()
 
     if rows:
       assert maxRows is None or len(rows) <= maxRows, "%d !<= %d" % (
@@ -998,9 +1033,9 @@ class ClientJobsDAO(object):
     failures
     """
     with ConnectionFactory.get() as conn:
-      return self._getMatchingRowsNoRetries(tableInfo, conn, fieldsToMatch,
+        rows = self._getMatchingRowsNoRetries(tableInfo, conn, fieldsToMatch,
                                             selectFieldNames, maxRows)
-
+    return  rows
 
   def _getOneMatchingRowNoRetries(self, tableInfo, conn, fieldsToMatch,
                                   selectFieldNames):
@@ -1040,9 +1075,9 @@ class ClientJobsDAO(object):
     failures
     """
     with ConnectionFactory.get() as conn:
-      return self._getOneMatchingRowNoRetries(tableInfo, conn, fieldsToMatch,
+        row = self._getOneMatchingRowNoRetries(tableInfo, conn, fieldsToMatch,
                                               selectFieldNames)
-
+    return row 
 
   @classmethod
   def _normalizeHash(cls, hashValue):
@@ -1123,24 +1158,25 @@ class ClientJobsDAO(object):
       initStatus = self.STATUS_NOTSTARTED
 
     # Create a new job entry
-    query = 'INSERT IGNORE INTO %s (status, client, client_info, client_key,' \
+    jobID = 0
+    query = 'INSERT  INTO %s (status, client, client_info, client_key,' \
             'cmd_line, params, job_hash, _eng_last_update_time, ' \
             'minimum_workers, maximum_workers, priority, _eng_job_type) ' \
             ' VALUES (%%s, %%s, %%s, %%s, %%s, %%s, %%s, ' \
-            '         UTC_TIMESTAMP(), %%s, %%s, %%s, %%s) ' \
+            "         date_trunc('second',clock_timestamp()), %%s, %%s, %%s, %%s) ON CONFLICT DO NOTHING " \
+            ' RETURNING job_id' \
             % (self.jobsTableName,)
     sqlParams = (initStatus, client, clientInfo, clientKey, cmdLine, params,
                  jobHash, minimumWorkers, maximumWorkers, priority, jobType)
-    numRowsInserted = conn.cursor.execute(query, sqlParams)
 
-    jobID = 0
+    conn.cursor.execute(query, sqlParams)
+    numRowsInserted = conn.cursor.fetchall() 
+    assert len(numRowsInserted) == 1, repr(len(numRowsInserted))
 
-    if numRowsInserted == 1:
       # Get the chosen job id
       # NOTE: LAST_INSERT_ID() returns 0 after intermittent connection failure
-      conn.cursor.execute('SELECT LAST_INSERT_ID()')
-      jobID = conn.cursor.fetchall()[0][0]
-      if jobID == 0:
+    jobID = numRowsInserted[0][0]
+    if jobID == 0:
         self._logger.warn(
           '_insertOrGetUniqueJobNoRetries: SELECT LAST_INSERT_ID() returned 0; '
           'likely due to reconnection in SteadyDB following INSERT. '
@@ -1148,12 +1184,6 @@ class ClientJobsDAO(object):
           'cmdLine=%r',
           jobType, client, _abbreviate(clientInfo, 32), clientKey, jobHash,
           cmdLine)
-    else:
-      # Assumption: nothing was inserted because this is a retry and the row
-      # with this client/hash already exists from our prior
-      # partially-successful attempt; or row with matching client/jobHash was
-      # inserted already by some process on some machine.
-      assert numRowsInserted == 0, repr(numRowsInserted)
 
     if jobID == 0:
       # Recover from intermittent failure in a partially-successful attempt;
@@ -1169,12 +1199,13 @@ class ClientJobsDAO(object):
     #  and start time as well
     if alreadyRunning:
       query = 'UPDATE %s SET _eng_cjm_conn_id=%%s, ' \
-              '              start_time=UTC_TIMESTAMP(), ' \
-              '              _eng_last_update_time=UTC_TIMESTAMP() ' \
+              "              start_time=date_trunc('second',clock_timestamp()), " \
+              "              _eng_last_update_time=date_trunc('second',clock_timestamp()) " \
               '          WHERE job_id=%%s' \
               % (self.jobsTableName,)
       conn.cursor.execute(query, (self._connectionID, jobID))
 
+    self._logger.debug('jobID insert %s' %(jobID))
     return jobID
 
 
@@ -1224,7 +1255,7 @@ class ClientJobsDAO(object):
       'worker_completion_msg=DEFAULT',
       'end_time=DEFAULT',
       'cancel=DEFAULT',
-      '_eng_last_update_time=UTC_TIMESTAMP()',
+      "_eng_last_update_time=date_trunc('second', clock_timestamp())",
       '_eng_allocate_new_workers=DEFAULT',
       '_eng_untended_dead_workers=DEFAULT',
       'num_failed_workers=DEFAULT',
@@ -1234,8 +1265,8 @@ class ClientJobsDAO(object):
     assignmentValues = [initStatus]
 
     if alreadyRunning:
-      assignments += ['_eng_cjm_conn_id=%s', 'start_time=UTC_TIMESTAMP()',
-                      '_eng_last_update_time=UTC_TIMESTAMP()']
+      assignments += ['_eng_cjm_conn_id=%s', "start_time=date_trunc('second', clock_timestamp())",
+                      "_eng_last_update_time=date_trunc('second', clock_timestamp())"]
       assignmentValues.append(self._connectionID)
     else:
       assignments += ['_eng_cjm_conn_id=DEFAULT', 'start_time=DEFAULT']
@@ -1247,8 +1278,8 @@ class ClientJobsDAO(object):
               % (self.jobsTableName, assignments)
     sqlParams = assignmentValues + [jobID, self.STATUS_COMPLETED]
 
-    numRowsAffected = conn.cursor.execute(query, sqlParams)
-
+    conn.cursor.execute(query, sqlParams)
+    numRowsAffected = conn.cursor.rowcount
     assert numRowsAffected <= 1, repr(numRowsAffected)
 
     if numRowsAffected == 0:
@@ -1294,7 +1325,7 @@ class ClientJobsDAO(object):
     # TODO: when Nupic job control states get figured out, there may be a
     #       different way to suspend jobs ("cancel" doesn't make sense for this)
 
-    # NOTE: jobCancel() does retries on transient mysql failures
+    # NOTE: jobCancel() does retries on transient postgres failures
     self.jobCancel(jobID)
 
     return
@@ -1505,7 +1536,8 @@ class ClientJobsDAO(object):
                          minimumWorkers, maximumWorkers, priority,
                          jobType, jobID, self.STATUS_COMPLETED)
 
-            numRowsUpdated = conn.cursor.execute(query, sqlParams)
+            conn.cursor.execute(query, sqlParams)
+            numRowsUpdated =  conn.cursor.rowcount
             assert numRowsUpdated <= 1, repr(numRowsUpdated)
 
             if numRowsUpdated == 0:
@@ -1553,20 +1585,22 @@ class ClientJobsDAO(object):
     NOTE: this function was factored out of jobStartNext because it's also
      needed for testing (e.g., test_client_jobs_dao.py)
     """
-    with ConnectionFactory.get() as conn:
-      query = 'UPDATE %s SET status=%%s, ' \
+    query = 'UPDATE %s SET status=%%s, ' \
                 '            _eng_cjm_conn_id=%%s, ' \
-                '            start_time=UTC_TIMESTAMP(), ' \
-                '            _eng_last_update_time=UTC_TIMESTAMP() ' \
+                "            start_time=date_trunc('second',clock_timestamp()), " \
+                "            _eng_last_update_time=date_trunc('second',clock_timestamp()) " \
                 '          WHERE (job_id=%%s AND status=%%s)' \
                 % (self.jobsTableName,)
-      sqlParams = [self.STATUS_RUNNING, self._connectionID,
+    sqlParams = [self.STATUS_RUNNING, self._connectionID,
                    jobID, self.STATUS_NOTSTARTED]
-      numRowsUpdated = conn.cursor.execute(query, sqlParams)
-      if numRowsUpdated != 1:
-        self._logger.warn('jobStartNext: numRowsUpdated=%r instead of 1; '
-                          'likely side-effect of transient connection '
-                          'failure', numRowsUpdated)
+
+    with ConnectionFactory.get() as conn:
+      conn.cursor.execute(query, sqlParams)
+      numRowsUpdated = conn.cursor.rowcount
+    if numRowsUpdated != 1:
+      self._logger.warn('jobStartNext: numRowsUpdated=%r instead of 1; '
+                        'likely side-effect of transient connection '
+                        'failure', numRowsUpdated)
     return
 
 
@@ -1607,13 +1641,12 @@ class ClientJobsDAO(object):
     """
 
     # Get a database connection and cursor
-    with ConnectionFactory.get() as conn:
-
-      query = 'UPDATE %s SET _eng_cjm_conn_id=%%s, ' \
+    query = 'UPDATE %s SET _eng_cjm_conn_id=%%s, ' \
               '              _eng_allocate_new_workers=TRUE ' \
               '    WHERE status=%%s ' \
               % (self.jobsTableName,)
-      conn.cursor.execute(query, [self._connectionID, self.STATUS_RUNNING])
+    with ConnectionFactory.get() as conn:
+        conn.cursor.execute(query, [self._connectionID, self.STATUS_RUNNING])
 
     return
 
@@ -1646,13 +1679,11 @@ class ClientJobsDAO(object):
   def jobCancelAllRunningJobs(self):
     """ Set cancel field of all currently-running jobs to true.
     """
-
+    query = 'UPDATE %s SET cancel=TRUE WHERE status<>%%s ' \
+              % (self.jobsTableName,)
     # Get a database connection and cursor
     with ConnectionFactory.get() as conn:
-
-      query = 'UPDATE %s SET cancel=TRUE WHERE status<>%%s ' \
-              % (self.jobsTableName,)
-      conn.cursor.execute(query, [self.STATUS_COMPLETED])
+        conn.cursor.execute(query, [self.STATUS_COMPLETED])
 
     return
 
@@ -1667,12 +1698,11 @@ class ClientJobsDAO(object):
     ----------------------------------------------------------------
     retval:      A count of running jobs with the cancel field set to true.
     """
-    with ConnectionFactory.get() as conn:
-      query = 'SELECT COUNT(job_id) '\
+    query = 'SELECT COUNT(job_id) '\
               'FROM %s ' \
               'WHERE (status<>%%s AND cancel is TRUE)' \
               % (self.jobsTableName,)
-
+    with ConnectionFactory.get() as conn:
       conn.cursor.execute(query, [self.STATUS_COMPLETED])
       rows = conn.cursor.fetchall()
 
@@ -1690,11 +1720,12 @@ class ClientJobsDAO(object):
     retval:      A (possibly empty) sequence of running job IDs with cancel field
                   set to true
     """
-    with ConnectionFactory.get() as conn:
-      query = 'SELECT job_id '\
+    query = 'SELECT job_id '\
               'FROM %s ' \
               'WHERE (status<>%%s AND cancel is TRUE)' \
               % (self.jobsTableName,)
+
+    with ConnectionFactory.get() as conn:
       conn.cursor.execute(query, [self.STATUS_COMPLETED])
       rows = conn.cursor.fetchall()
 
@@ -1763,20 +1794,18 @@ class ClientJobsDAO(object):
 
     # Get a database connection and cursor
     combinedResults = None
-
+    query = ' '.join([
+        'SELECT %s.*, %s.*' % (self.jobsTableName, self.modelsTableName),
+        'FROM %s' % self.jobsTableName,
+        'LEFT JOIN %s USING(job_id)' % self.modelsTableName,
+        'WHERE job_id=%s'])
     with ConnectionFactory.get() as conn:
       # NOTE: Since we're using a LEFT JOIN on the models table, there need not
       # be a matching row in the models table, but the matching row from the
       # jobs table will still be returned (along with all fields from the models
       # table with values of None in case there were no matchings models)
-      query = ' '.join([
-        'SELECT %s.*, %s.*' % (self.jobsTableName, self.modelsTableName),
-        'FROM %s' % self.jobsTableName,
-        'LEFT JOIN %s USING(job_id)' % self.modelsTableName,
-        'WHERE job_id=%s'])
-
+      
       conn.cursor.execute(query, (jobID,))
-
       if conn.cursor.rowcount > 0:
         combinedResults = [
           ClientJobsDAO._combineResults(
@@ -1809,8 +1838,9 @@ class ClientJobsDAO(object):
       raise RuntimeError("jobID=%s not found within the jobs table" % (jobID))
 
     # Create a namedtuple with the names to values
-    return self._jobs.jobInfoNamedTuple._make(row)
-
+    res = self._jobs.jobInfoNamedTuple._make(row)
+    res = res._replace(jobHash=bytes(res.jobHash))
+    return res 
 
   @logExceptions(_LOGGER)
   @g_retrySQL
@@ -1827,23 +1857,24 @@ class ClientJobsDAO(object):
     to False for hypersearch workers
     """
     # Get a database connection and cursor
+    query = 'UPDATE %s SET status=%%s, ' \
+            "              _eng_last_update_time=date_trunc('second', clock_timestamp()) " \
+            '          WHERE job_id=%%s' \
+            % (self.jobsTableName,)
+    sqlParams = [status, jobID]
+
+    if useConnectionID:
+      query += ' AND _eng_cjm_conn_id=%s'
+      sqlParams.append(self._connectionID)
+
     with ConnectionFactory.get() as conn:
-      query = 'UPDATE %s SET status=%%s, ' \
-              '              _eng_last_update_time=UTC_TIMESTAMP() ' \
-              '          WHERE job_id=%%s' \
-              % (self.jobsTableName,)
-      sqlParams = [status, jobID]
+      conn.cursor.execute(query, sqlParams)
+      result =  conn.cursor.rowcount
 
-      if useConnectionID:
-        query += ' AND _eng_cjm_conn_id=%s'
-        sqlParams.append(self._connectionID)
-
-      result = conn.cursor.execute(query, sqlParams)
-
-      if result != 1:
-        raise RuntimeError("Tried to change the status of job %d to %s, but "
-                           "this job belongs to some other CJM" % (
-                            jobID, status))
+    if result != 1:
+      raise RuntimeError("Tried to change the status of job %d to %s, but "
+                         "this job belongs to some other CJM" % (
+                          jobID, status))
 
 
   @logExceptions(_LOGGER)
@@ -1864,27 +1895,28 @@ class ClientJobsDAO(object):
     """
 
     # Get a database connection and cursor
+    query = 'UPDATE %s SET status=%%s, ' \
+            '              completion_reason=%%s, ' \
+            '              completion_msg=%%s, ' \
+            "              end_time=date_trunc('second',clock_timestamp()), " \
+            "              _eng_last_update_time=date_trunc('second',clock_timestamp()) " \
+            '          WHERE job_id=%%s' \
+            % (self.jobsTableName,)
+    sqlParams = [self.STATUS_COMPLETED, completionReason, completionMsg,
+                 jobID]
+
+    if useConnectionID:
+      query += ' AND _eng_cjm_conn_id=%s'
+      sqlParams.append(self._connectionID)
+
     with ConnectionFactory.get() as conn:
-      query = 'UPDATE %s SET status=%%s, ' \
-              '              completion_reason=%%s, ' \
-              '              completion_msg=%%s, ' \
-              '              end_time=UTC_TIMESTAMP(), ' \
-              '              _eng_last_update_time=UTC_TIMESTAMP() ' \
-              '          WHERE job_id=%%s' \
-              % (self.jobsTableName,)
-      sqlParams = [self.STATUS_COMPLETED, completionReason, completionMsg,
-                   jobID]
+      conn.cursor.execute(query, sqlParams)
+      result = conn.cursor.rowcount
 
-      if useConnectionID:
-        query += ' AND _eng_cjm_conn_id=%s'
-        sqlParams.append(self._connectionID)
-
-      result = conn.cursor.execute(query, sqlParams)
-
-      if result != 1:
-        raise RuntimeError("Tried to change the status of jobID=%s to "
-                           "completed, but this job could not be found or "
-                           "belongs to some other CJM" % (jobID))
+    if result != 1:
+      raise RuntimeError("Tried to change the status of jobID=%s to "
+                         "completed, but this job could not be found or "
+                         "belongs to some other CJM" % (jobID))
 
 
   @logExceptions(_LOGGER)
@@ -1899,7 +1931,7 @@ class ClientJobsDAO(object):
     to False for hypersearch workers
     """
     self._logger.info('Canceling jobID=%s', jobID)
-    # NOTE: jobSetFields does retries on transient mysql failures
+    # NOTE: jobSetFields does retries on transient postgres failures
     self.jobSetFields(jobID, {"cancel" : True}, useConnectionID=False)
 
 
@@ -1919,11 +1951,12 @@ class ClientJobsDAO(object):
     """ Return the number of jobs for the given clientInfo and a status that is
     not completed.
     """
-    with ConnectionFactory.get() as conn:
-      query = 'SELECT count(job_id) ' \
+    query = 'SELECT count(job_id) ' \
               'FROM %s ' \
               'WHERE client_info = %%s ' \
               ' AND status != %%s' %  self.jobsTableName
+
+    with ConnectionFactory.get() as conn:
       conn.cursor.execute(query, [clientInfo, self.STATUS_COMPLETED])
       activeJobCount = conn.cursor.fetchone()[0]
 
@@ -1936,11 +1969,12 @@ class ClientJobsDAO(object):
     """ Return the number of jobs for the given clientKey and a status that is
     not completed.
     """
+    query = 'SELECT count(job_id) ' \
+            'FROM %s ' \
+            'WHERE client_key = %%s ' \
+            ' AND status != %%s' %  self.jobsTableName
+
     with ConnectionFactory.get() as conn:
-      query = 'SELECT count(job_id) ' \
-              'FROM %s ' \
-              'WHERE client_key = %%s ' \
-              ' AND status != %%s' %  self.jobsTableName
       conn.cursor.execute(query, [clientKey, self.STATUS_COMPLETED])
       activeJobCount = conn.cursor.fetchone()[0]
 
@@ -1957,11 +1991,11 @@ class ClientJobsDAO(object):
     #  request
     dbFields = [self._jobs.pubToDBNameDict[x] for x in fields]
     dbFieldsStr = ','.join(['job_id'] + dbFields)
-
-    with ConnectionFactory.get() as conn:
-      query = 'SELECT %s FROM %s ' \
+    query = 'SELECT %s FROM %s ' \
               'WHERE client_info = %%s ' \
               ' AND status != %%s' % (dbFieldsStr, self.jobsTableName)
+
+    with ConnectionFactory.get() as conn:
       conn.cursor.execute(query, [clientInfo, self.STATUS_COMPLETED])
       rows = conn.cursor.fetchall()
 
@@ -1978,11 +2012,11 @@ class ClientJobsDAO(object):
     #  request
     dbFields = [self._jobs.pubToDBNameDict[x] for x in fields]
     dbFieldsStr = ','.join(['job_id'] + dbFields)
-
-    with ConnectionFactory.get() as conn:
-      query = 'SELECT %s FROM %s ' \
+    query = 'SELECT %s FROM %s ' \
               'WHERE client_key = %%s ' \
               ' AND status != %%s' % (dbFieldsStr, self.jobsTableName)
+
+    with ConnectionFactory.get() as conn:
       conn.cursor.execute(query, [clientKey, self.STATUS_COMPLETED])
       rows = conn.cursor.fetchall()
 
@@ -1999,8 +2033,8 @@ class ClientJobsDAO(object):
     dbFields = [self._jobs.pubToDBNameDict[x] for x in fields]
     dbFieldsStr = ','.join(['job_id'] + dbFields)
 
+    query = 'SELECT %s FROM %s' % (dbFieldsStr, self.jobsTableName)
     with ConnectionFactory.get() as conn:
-      query = 'SELECT %s FROM %s' % (dbFieldsStr, self.jobsTableName)
       conn.cursor.execute(query)
       rows = conn.cursor.fetchall()
 
@@ -2028,8 +2062,7 @@ class ClientJobsDAO(object):
     """
     dbFields = [self._jobs.pubToDBNameDict[x] for x in fields]
     dbFieldsStr = ','.join(['job_id'] + dbFields)
-    with ConnectionFactory.get() as conn:
-      query = \
+    query = \
         'SELECT DISTINCT %s ' \
         'FROM %s j ' \
         'LEFT JOIN %s m USING(job_id) '\
@@ -2037,6 +2070,7 @@ class ClientJobsDAO(object):
           'AND _eng_job_type = %%s' % (dbFieldsStr, self.jobsTableName,
             self.modelsTableName)
 
+    with ConnectionFactory.get() as conn:
       conn.cursor.execute(query, [self.STATUS_COMPLETED, jobType])
       return conn.cursor.fetchall()
 
@@ -2056,7 +2090,7 @@ class ClientJobsDAO(object):
     Returns:    A sequence of field values in the same order as the requested
                  field list -> [field1, field2, ...]
     """
-    # NOTE: jobsGetFields retries on transient mysql failures
+    # NOTE: jobsGetFields retries on transient postgres failures
     return self.jobsGetFields([jobID], fields, requireAll=True)[0][1]
 
 
@@ -2140,8 +2174,9 @@ class ClientJobsDAO(object):
 
     # Get a database connection and cursor
     with ConnectionFactory.get() as conn:
-      result = conn.cursor.execute(query, sqlParams)
-
+      conn.cursor.execute(query, sqlParams)
+      result =  conn.cursor.rowcount
+      
     if result != 1 and not ignoreUnchanged:
       raise RuntimeError(
         "Tried to change fields (%r) of jobID=%s conn_id=%r), but an error " \
@@ -2185,13 +2220,14 @@ class ClientJobsDAO(object):
       conditionExpression = '%s=%%s' % (dbFieldName,)
       conditionValue.append(curValue)
 
-    query = 'UPDATE %s SET _eng_last_update_time=UTC_TIMESTAMP(), %s=%%s ' \
+    query = "UPDATE %s SET _eng_last_update_time=date_trunc('second',clock_timestamp()), %s=%%s " \
             '          WHERE job_id=%%s AND %s' \
             % (self.jobsTableName, dbFieldName, conditionExpression)
     sqlParams = [newValue, jobID] + conditionValue
 
     with ConnectionFactory.get() as conn:
-      result = conn.cursor.execute(query, sqlParams)
+      conn.cursor.execute(query, sqlParams)
+      result = conn.cursor.rowcount  
 
     return (result == 1)
 
@@ -2217,19 +2253,19 @@ class ClientJobsDAO(object):
     """
     # Get the private field name and string form of the value
     dbFieldName = self._jobs.pubToDBNameDict[fieldName]
-
-    # Get a database connection and cursor
-    with ConnectionFactory.get() as conn:
-      query = 'UPDATE %s SET %s=%s+%%s ' \
+    query = 'UPDATE %s SET %s=%s+%%s ' \
               '          WHERE job_id=%%s' \
               % (self.jobsTableName, dbFieldName, dbFieldName)
-      sqlParams = [increment, jobID]
+    sqlParams = [increment, jobID]
 
-      if useConnectionID:
+    if useConnectionID:
         query += ' AND _eng_cjm_conn_id=%s'
         sqlParams.append(self._connectionID)
 
-      result = conn.cursor.execute(query, sqlParams)
+    # Get a database connection and cursor
+    with ConnectionFactory.get() as conn:
+      conn.cursor.execute(query, sqlParams)
+      result = conn.cursor.rowcount
 
     if result != 1:
       raise RuntimeError(
@@ -2248,11 +2284,12 @@ class ClientJobsDAO(object):
     jobID:      job ID of model to modify
     results:    new results (json dict string)
     """
-    with ConnectionFactory.get() as conn:
-      query = 'UPDATE %s SET _eng_last_update_time=UTC_TIMESTAMP(), ' \
+    query = "UPDATE %s SET _eng_last_update_time=date_trunc('second', clock_timestamp()), " \
               '              results=%%s ' \
               '          WHERE job_id=%%s' % (self.jobsTableName,)
-      conn.cursor.execute(query, [results, jobID])
+
+    with ConnectionFactory.get() as conn:
+        conn.cursor.execute(query, [results, jobID])
 
 
   @logExceptions(_LOGGER)
@@ -2265,8 +2302,8 @@ class ClientJobsDAO(object):
     """
     self._logger.info('Deleting all rows from models table %r',
                       self.modelsTableName)
+    query = 'DELETE FROM %s' % (self.modelsTableName)
     with ConnectionFactory.get() as conn:
-      query = 'DELETE FROM %s' % (self.modelsTableName)
       conn.cursor.execute(query)
 
 
@@ -2298,8 +2335,8 @@ class ClientJobsDAO(object):
       particleHash = paramsHash
 
     # Normalize hashes
-    paramsHash = self._normalizeHash(paramsHash)
-    particleHash = self._normalizeHash(particleHash)
+    #paramsHash = self._normalizeHash(paramsHash)
+    #particleHash = self._normalizeHash(particleHash)
 
     def findExactMatchNoRetries(conn):
       return self._getOneMatchingRowNoRetries(
@@ -2315,7 +2352,7 @@ class ClientJobsDAO(object):
 
     # Check if the model is already in the models table
     #
-    # NOTE: with retries of mysql transient failures, we can't always tell
+    # NOTE: with retries of postgres transient failures, we can't always tell
     #  whether the row was already inserted (e.g., comms failure could occur
     #  after insertion into table, but before arrival or response), so the
     #  need to check before attempting to insert a new row
@@ -2330,19 +2367,21 @@ class ClientJobsDAO(object):
     def insertModelWithRetries():
       """ NOTE: it's possible that another process on some machine is attempting
       to insert the same model at the same time as the caller """
-      with ConnectionFactory.get() as conn:
-        # Create a new job entry
-        query = 'INSERT INTO %s (job_id, params, status, _eng_params_hash, ' \
+      query = 'INSERT INTO %s (job_id, params, status, _eng_params_hash, ' \
                 '  _eng_particle_hash, start_time, _eng_last_update_time, ' \
                 '  _eng_worker_conn_id) ' \
-                '  VALUES (%%s, %%s, %%s, %%s, %%s, UTC_TIMESTAMP(), ' \
-                '          UTC_TIMESTAMP(), %%s) ' \
+                "  VALUES (%%s, %%s, %%s, %%s, %%s, date_trunc('second', clock_timestamp()), " \
+                "          date_trunc('second', clock_timestamp()), %%s) " \
+                '          RETURNING model_id' \
                 % (self.modelsTableName,)
-        sqlParams = (jobID, params, self.STATUS_RUNNING, paramsHash,
+      sqlParams = (jobID, params, self.STATUS_RUNNING, paramsHash,
                      particleHash, self._connectionID)
+
+      with ConnectionFactory.get() as conn:
+        # Create a new job entry
         try:
-          numRowsAffected = conn.cursor.execute(query, sqlParams)
-        except Exception as e:
+          conn.cursor.execute(query, sqlParams)
+        except psycopg2.Error as e:
           # NOTE: We have seen instances where some package in the calling
           #  chain tries to interpret the exception message using unicode.
           #  Since the exception message contains binary data (the hashes), this
@@ -2354,59 +2393,64 @@ class ClientJobsDAO(object):
           #
           #  If it weren't for this possible Unicode translation error, we
           #  could watch for only the exceptions we want, like this:
-          #  except pymysql.IntegrityError, e:
-          #    if e.args[0] != mysqlerrors.DUP_ENTRY:
+          #  except psycopg2.IntegrityError, e:
+          #    if e.args[0] != postgres.DUP_ENTRY:
           #      raise
-          if "Duplicate entry" not in str(e):
+          if "duplicate key" not in str(e):
             raise
 
           # NOTE: duplicate entry scenario: however, we can't discern
           # whether it was inserted by another process or this one, because an
           # intermittent failure may have caused us to retry
           self._logger.info('Model insert attempt failed with DUP_ENTRY: '
-                            'jobID=%s; paramsHash=%s OR particleHash=%s; %r',
-                            jobID, paramsHash,
-                            particleHash, e)
+                                'jobID=%s; paramsHash=%s OR particleHash=%s; %r',
+                                jobID, paramsHash,
+                                particleHash, e)
         else:
-          if numRowsAffected == 1:
-            # NOTE: SELECT LAST_INSERT_ID() returns 0 after re-connection
-            conn.cursor.execute('SELECT LAST_INSERT_ID()')
-            modelID = conn.cursor.fetchall()[0][0]
-            if modelID != 0:
-              return (modelID, True)
+            numRowsAffected =  conn.cursor.fetchall()
+            if len(numRowsAffected) == 1:
+              # NOTE: SELECT LAST_INSERT_ID() returns 0 after re-connection
+              modelID = numRowsAffected[0][0]
+              self._logger.debug("insert modelID %s" % (modelID))
+              if modelID != 0:
+                return (modelID, True)
+              else:
+                self._logger.warn(
+                  'SELECT LAST_INSERT_ID for model returned 0, implying loss of '
+                  'connection: jobID=%s; paramsHash=%r; particleHash=%r',
+                  jobID, paramsHash, particleHash)
             else:
-              self._logger.warn(
-                'SELECT LAST_INSERT_ID for model returned 0, implying loss of '
-                'connection: jobID=%s; paramsHash=%r; particleHash=%r',
-                jobID, paramsHash, particleHash)
-          else:
-            self._logger.error(
-              'Attempt to insert model resulted in unexpected numRowsAffected: '
-              'expected 1, but got %r; jobID=%s; paramsHash=%r; '
-              'particleHash=%r',
-              numRowsAffected, jobID, paramsHash, particleHash)
+              self._logger.error(
+                'Attempt to insert model resulted in unexpected numRowsAffected: '
+                'expected 1, but got %r; jobID=%s; paramsHash=%r; '
+                'particleHash=%r',
+                len(numRowsAffected), jobID, paramsHash, particleHash)
 
         # Look up the model and discern whether it is tagged with our conn id
+      with ConnectionFactory.get() as conn:
         row = findExactMatchNoRetries(conn)
-        if row is not None:
-          (modelID, connectionID) = row
-          return (modelID, connectionID == self._connectionID)
+      if row is not None:
+        (modelID, connectionID) = row
+        return (modelID, connectionID == self._connectionID)
 
         # This set of params is already in the table, just get the modelID
-        query = 'SELECT (model_id) FROM %s ' \
+      query = 'SELECT (model_id) FROM %s ' \
                 '                  WHERE job_id=%%s AND ' \
                 '                        (_eng_params_hash=%%s ' \
                 '                         OR _eng_particle_hash=%%s) ' \
                 '                  LIMIT 1 ' \
                 % (self.modelsTableName,)
-        sqlParams = [jobID, paramsHash, particleHash]
-        numRowsFound = conn.cursor.execute(query, sqlParams)
-        assert numRowsFound == 1, (
-          'Model not found: jobID=%s AND (paramsHash=%r OR particleHash=%r); '
-          'numRowsFound=%r') % (jobID, paramsHash, particleHash, numRowsFound)
-        (modelID,) = conn.cursor.fetchall()[0]
-        return (modelID, False)
+      sqlParams = [jobID, paramsHash, particleHash]
 
+      with ConnectionFactory.get() as conn:
+        conn.cursor.execute(query, sqlParams)
+        numRowsFound = conn.cursor.fetchall()
+
+      assert len(numRowsFound) == 1, (
+        'Model not found: jobID=%s AND (paramsHash=%r OR particleHash=%r); '
+        'numRowsFound=%r') % (jobID, paramsHash, particleHash, len(numRowsFound))
+      (modelID,) = numRowsFound[0]
+      return (modelID, False)
 
     return insertModelWithRetries()
 
@@ -2432,8 +2476,13 @@ class ClientJobsDAO(object):
       self._models, dict(model_id=modelIDs),
       [self._models.pubToDBNameDict[f]
        for f in self._models.modelInfoNamedTuple._fields])
-
-    results = [self._models.modelInfoNamedTuple._make(r) for r in rows]
+    
+    results = []
+    for r in rows:
+        res = self._models.modelInfoNamedTuple._make(r)
+        res = res._replace(engParamsHash=bytes(res.engParamsHash))
+        res = res._replace(engParticleHash=bytes(res.engParticlesHash))
+        results.append(res)
 
     # NOTE: assetion will also fail if modelIDs contains duplicates
     assert len(results) == len(modelIDs), "modelIDs not found: %s" % (
@@ -2568,16 +2617,15 @@ class ClientJobsDAO(object):
     """
 
     assert len(fields) >= 1, "fields is empty"
+    dbFields = [self._models.pubToDBNameDict[f] for f in fields]
+    dbFieldStr = ", ".join(dbFields)
+
+    query = 'SELECT model_id, {fields} from {models}' \
+            '   WHERE job_id=%s AND model_checkpoint_id IS NOT NULL'.format(
+      fields=dbFieldStr, models=self.modelsTableName)
 
     # Get a database connection and cursor
     with ConnectionFactory.get() as conn:
-      dbFields = [self._models.pubToDBNameDict[f] for f in fields]
-      dbFieldStr = ", ".join(dbFields)
-
-      query = 'SELECT model_id, {fields} from {models}' \
-              '   WHERE job_id=%s AND model_checkpoint_id IS NOT NULL'.format(
-        fields=dbFieldStr, models=self.modelsTableName)
-
       conn.cursor.execute(query, [jobID])
       rows = conn.cursor.fetchall()
 
@@ -2617,10 +2665,12 @@ class ClientJobsDAO(object):
             '          WHERE model_id=%%s' \
             % (self.modelsTableName, assignmentExpressions)
     sqlParams = assignmentValues + [modelID]
+    self._logger.debug("setFields modelID %r", modelID )
 
     # Get a database connection and cursor
     with ConnectionFactory.get() as conn:
-      numAffectedRows = conn.cursor.execute(query, sqlParams)
+      conn.cursor.execute(query, sqlParams)
+      numAffectedRows = conn.cursor.rowcount
       self._logger.debug("Executed: numAffectedRows=%r, query=%r, sqlParams=%r",
                          numAffectedRows, query, sqlParams)
 
@@ -2628,7 +2678,7 @@ class ClientJobsDAO(object):
       raise RuntimeError(
         ("Tried to change fields (%r) of model %r (conn_id=%r), but an error "
          "occurred. numAffectedRows=%r; query=%r; sqlParams=%r") % (
-          fields, modelID, self._connectionID, numAffectedRows, query,
+          fields, modelID, self._connectionID, len(numAffectedRows), query,
           sqlParams,))
 
 
@@ -2660,7 +2710,13 @@ class ClientJobsDAO(object):
       (set(modelIDs) - set(r[0] for r in rows)),)
 
     # Return the params and params hashes as a namedtuple
-    return [self._models.getParamsNamedTuple._make(r) for r in rows]
+    results = []
+    for r in rows:
+        res = self._models.getParamsNamedTuple._make(r) 
+        res = res._replace(engParamsHash=bytes(res.engParamsHash))
+        results.append(res)
+    return results
+
 
 
   @logExceptions(_LOGGER)
@@ -2695,7 +2751,12 @@ class ClientJobsDAO(object):
       (set(modelIDs) - set(r[0] for r in rows)),)
 
     # Return the results as a list of namedtuples
-    return [self._models.getResultAndStatusNamedTuple._make(r) for r in rows]
+    results = []
+    for r in rows:
+        res = self._models.getResultAndStatusNamedTuple._make(r)
+        res = res._replace(engParamsHash=bytes(res.engParamsHash))
+        results.append(res)
+    return results
 
 
   @logExceptions(_LOGGER)
@@ -2739,7 +2800,7 @@ class ClientJobsDAO(object):
     numRecords:   new numRecords, or None to ignore
     """
 
-    assignmentExpressions = ['_eng_last_update_time=UTC_TIMESTAMP()',
+    assignmentExpressions = ["_eng_last_update_time=date_trunc('second', clock_timestamp())",
                              'update_counter=update_counter+1']
     assignmentValues = []
 
@@ -2764,13 +2825,14 @@ class ClientJobsDAO(object):
 
     # Get a database connection and cursor
     with ConnectionFactory.get() as conn:
-      numRowsAffected = conn.cursor.execute(query, sqlParams)
+      conn.cursor.execute(query, sqlParams)
+      numRowsAffected = conn.cursor.rowcount 
 
     if numRowsAffected != 1:
       raise InvalidConnectionException(
         ("Tried to update the info of modelID=%r using connectionID=%r, but "
          "this model belongs to some other worker or modelID not found; "
-         "numRowsAffected=%r") % (modelID,self._connectionID, numRowsAffected,))
+         "numRowsAffected=%r") % (modelID,self._connectionID, numRowsAffected))
 
 
   def modelUpdateTimestamp(self, modelID):
@@ -2802,9 +2864,9 @@ class ClientJobsDAO(object):
     query = 'UPDATE %s SET status=%%s, ' \
               '            completion_reason=%%s, ' \
               '            completion_msg=%%s, ' \
-              '            end_time=UTC_TIMESTAMP(), ' \
+              "            end_time=date_trunc('second', clock_timestamp()), " \
               '            cpu_time=%%s, ' \
-              '            _eng_last_update_time=UTC_TIMESTAMP(), ' \
+              "            _eng_last_update_time=date_trunc('second', clock_timestamp()), " \
               '            update_counter=update_counter+1 ' \
               '        WHERE model_id=%%s' \
               % (self.modelsTableName,)
@@ -2816,7 +2878,8 @@ class ClientJobsDAO(object):
       sqlParams.append(self._connectionID)
 
     with ConnectionFactory.get() as conn:
-      numRowsAffected = conn.cursor.execute(query, sqlParams)
+      conn.cursor.execute(query, sqlParams)
+      numRowsAffected =  conn.cursor.rowcount
 
     if numRowsAffected != 1:
       raise InvalidConnectionException(
@@ -2842,20 +2905,21 @@ class ClientJobsDAO(object):
     @g_retrySQL
     def findCandidateModelWithRetries():
       modelID = None
-      with ConnectionFactory.get() as conn:
-        # TODO: may need a table index on job_id/status for speed
-        query = 'SELECT model_id FROM %s ' \
+      query = 'SELECT model_id FROM %s ' \
                 '   WHERE  status=%%s ' \
                 '          AND job_id=%%s ' \
-                '          AND TIMESTAMPDIFF(SECOND, ' \
-                '                            _eng_last_update_time, ' \
-                '                            UTC_TIMESTAMP()) > %%s ' \
+                "              AND ( date_trunc('second', clock_timestamp()) - _eng_last_update_time ) " \
+                "                                 > interval '%%s seconds' " \
                 '   LIMIT 1 ' \
                 % (self.modelsTableName,)
-        sqlParams = [self.STATUS_RUNNING, jobId, maxUpdateInterval]
-        numRows = conn.cursor.execute(query, sqlParams)
-        rows = conn.cursor.fetchall()
+      sqlParams = [self.STATUS_RUNNING, jobId, maxUpdateInterval]
 
+      with ConnectionFactory.get() as conn:
+        # TODO: may need a table index on job_id/status for speed
+        conn.cursor.execute(query, sqlParams)
+        rows = conn.cursor.fetchall()
+      
+      numRows = len(rows)
       assert numRows <= 1, "Unexpected numRows: %r" % numRows
       if numRows == 1:
         (modelID,) = rows[0]
@@ -2865,22 +2929,21 @@ class ClientJobsDAO(object):
     @g_retrySQL
     def adoptModelWithRetries(modelID):
       adopted = False
-      with ConnectionFactory.get() as conn:
-        query = 'UPDATE %s SET _eng_worker_conn_id=%%s, ' \
-                  '            _eng_last_update_time=UTC_TIMESTAMP() ' \
-                  '        WHERE model_id=%%s ' \
-                  '              AND status=%%s' \
-                  '              AND TIMESTAMPDIFF(SECOND, ' \
-                  '                                _eng_last_update_time, ' \
-                  '                                UTC_TIMESTAMP()) > %%s ' \
-                  '        LIMIT 1 ' \
+      query = "UPDATE %s SET _eng_worker_conn_id=%%s, " \
+                  "            _eng_last_update_time=date_trunc('second', clock_timestamp()) " \
+                  "        WHERE model_id=%%s " \
+                  "              AND status=%%s" \
+                  "              AND (date_trunc('second', clock_timestamp())-_eng_last_update_time) " \
+                  "                                 > interval '%%s seconds' " \
                   % (self.modelsTableName,)
-        sqlParams = [self._connectionID, modelID, self.STATUS_RUNNING,
+      sqlParams = [self._connectionID, modelID, self.STATUS_RUNNING,
                      maxUpdateInterval]
-        numRowsAffected = conn.cursor.execute(query, sqlParams)
 
+      with ConnectionFactory.get() as conn:
+        conn.cursor.execute(query, sqlParams)
+        numRowsAffected = conn.cursor.rowcount
         assert numRowsAffected <= 1, 'Unexpected numRowsAffected=%r' % (
-          numRowsAffected,)
+          numRowsAffected)
 
         if numRowsAffected == 1:
           adopted = True

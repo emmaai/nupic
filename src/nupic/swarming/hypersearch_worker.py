@@ -30,6 +30,7 @@ import hashlib
 import itertools
 import io
 import traceback
+import tempfile
 import nupic
 nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
 nupic.__path__ = nupic_path
@@ -282,12 +283,12 @@ class HypersearchWorker(object):
       cjDAO.jobSetFields(options.jobID,
            fields={'workerCompletionReason': ClientJobsDAO.CMPL_REASON_SUCCESS,
                    'cancel': False,
+                   'workerCompletionMsg': None,
                    #'engWorkerState': None
                    },
            useConnectionID=False,
            ignoreUnchanged=True)
     jobInfo = cjDAO.jobInfo(options.jobID)
-    print("jobInfo", options.jobID)
     self.logger.info("Job info retrieved: %s" % (str(clippedObj(jobInfo))))
 
 
@@ -366,6 +367,7 @@ class HypersearchWorker(object):
                 modelParams = json.loads(mParamsAndHash.params)
                 particleHash = cjDAO.modelsGetFields(modelID,
                                   ['engParticleHash'])[0]
+                particleHash = bytes(particleHash)
                 particleInst = "%s.%s" % (
                           modelParams['particleState']['id'],
                           modelParams['particleState']['genIdx'])
@@ -523,6 +525,9 @@ def main(argv):
         "represents the desired logging level (10=logging.DEBUG, "
         "20=logging.INFO, etc.) [default: %default].")
 
+  parser.add_option("--redirect", action="store_true", default=False, 
+          help="stdout/stderr redirect [default: %default]")
+
   # Evaluate command line arguments
   (options, args) = parser.parse_args(argv[1:])
   if len(args) != 0:
@@ -534,6 +539,10 @@ def main(argv):
 
   if (options.jobID is None and options.params is None):
     raise RuntimeError("Either --jobID or --params must be specified.")
+
+  if options.redirect is True:
+      sys.stdout = tempfile.NamedTemporaryFile(mode='w', delete=False)
+      sys.stderr = tempfile.NamedTemporaryFile(mode='w', delete=False)
 
   initLogging(verbose=True)
 
@@ -594,6 +603,17 @@ def main(argv):
   return jobID
 
 
+def dask_main(argv):
+  logging.setLoggerClass(ExtendedLogger)
+  buildID = Configuration.get('nupic.software.buildNumber', 'N/A')
+  logPrefix = '<BUILDID=%s, WORKER=HS, WRKID=N/A, JOBID=N/A> ' % buildID
+  ExtendedLogger.setLogPrefix(logPrefix)
+  try:
+    main(argv)
+  except:
+    logging.exception("HypersearchWorker is exiting with unhandled exception; "
+                      "argv=%r", sys.argv)
+    raise
 
 if __name__ == "__main__":
   logging.setLoggerClass(ExtendedLogger)

@@ -251,13 +251,13 @@ class HsState(object):
                 'engWorkerState', str(newStateJSON), str(self._priorStateJSON))
 
     if success:
-      self.logger.debug("Success changing hsState to: \n%s " % \
+      self.logger.debug("Success changing hsState to: %s " % \
                        (pprint.pformat(self._state, indent=4)))
       self._priorStateJSON = newStateJSON
 
     # If no success, read in the current state from the DB
     else:
-      self.logger.debug("Failed to change hsState to: \n%s " % \
+      self.logger.debug("Failed to change hsState to: %s " % \
                        (pprint.pformat(self._state, indent=4)))
 
       self._priorStateJSON = self._hsObj._cjDAO.jobGetFields(self._hsObj._jobID,
@@ -265,7 +265,7 @@ class HsState(object):
       self._state =  json.loads(self._priorStateJSON)
 
       self.logger.info("New hsState has been set by some other worker to: "
-                       " \n%s" % (pprint.pformat(self._state, indent=4)))
+                       " %s" % (pprint.pformat(self._state, indent=4)))
 
     return success
 
@@ -361,6 +361,7 @@ class HsState(object):
       else:
         baseErrScore = fieldScores[0][0]
 
+    self.logger.debug("FieldContributions fieldScores: %s" % (fieldScores))
 
     # -----------------------------------------------------------------------
     # Prepare and return the fieldContributions dict
@@ -549,6 +550,8 @@ class HsState(object):
 
     # If new status is 'killed', kill off any running particles in that swarm
     if newStatus=='killed':
+      self.logger.debug("emma newStatus killed: %s %s" % \
+              (swarmId, newStatus))
       self._hsObj.killSwarmParticles(swarmId)
 
     # In case speculative particles are enabled, make sure we generate a new
@@ -697,7 +700,7 @@ class HsState(object):
     activeSwarms.extend(self.getCompletingSwarms())
     activeSwarms = [(swarm, self._state["swarms"][swarm],
                      self._state["swarms"][swarm]["bestErrScore"]) \
-                                                for swarm in activeSwarms if self._state["swarms"][swarm]["bestErrScore"] is not None]
+                                                for swarm in activeSwarms]
 
     # Form the activeMatrix. Each row corresponds to a sprint. Each row
     #  contains the list of swarm tuples that belong to that sprint, sorted
@@ -710,7 +713,9 @@ class HsState(object):
     for swarm in activeSwarms:
       activeMatrix[swarm[1]["sprintIdx"]].append(swarm)
     for sprint in activeMatrix:
-      sprint.sort(key=itemgetter(2))
+        #sprint.sort(key=itemgetter(2))
+        sprint.sort(key=lambda x: x[2] if x[2] is not None else numpy.inf)
+        self.logger.debug("emma active sprint: %s" % (sprint))
 
 
     # Figure out which active swarms to kill
@@ -899,8 +904,10 @@ class HsState(object):
         # Grab the top maxBranching base sprint swarms.
         swarms = self._state["swarms"]
         sprintSwarms = [(swarm, swarms[swarm]["bestErrScore"]) \
-            for swarm in swarms if swarms[swarm]["sprintIdx"] == baseSprintIdx and swarms[swarm]["bestErrScore"] is not None]
-        sprintSwarms = sorted(sprintSwarms, key=itemgetter(1))
+            for swarm in swarms if swarms[swarm]["sprintIdx"] == baseSprintIdx]
+        #sprintSwarms = sorted(sprintSwarms, key=itemgetter(1))
+        sprintSwarms.sort(key=lambda x: x[1] if x[1] is not None else numpy.inf)
+        self.logger.debug("emma sprintSwarms: %s" % (sprintSwarms))
         if self._hsObj._maxBranching > 0:
           sprintSwarms = sprintSwarms[0:self._hsObj._maxBranching]
 
@@ -913,6 +920,7 @@ class HsState(object):
         encoderAddSet = [encoder for encoder in encoderAddSet \
                          if not str(encoder) in toRemove]
 
+        self.logger.debug("emma FieldContributions keeping: %s" % (encoderAddSet))
       # If no limit on the branching or min contribution, simply use all of the
       # encoders.
       else:

@@ -22,13 +22,14 @@
 import logging
 import platform
 import traceback
+import os
+from subprocess import Popen, PIPE, call
 
 from DBUtils import SteadyDB
 from DBUtils.PooledDB import PooledDB
 
-import pymysql
+import psycopg2
 from nupic.support.configuration import Configuration
-
 
 _MODULE_NAME = "nupic.database.Connection"
 
@@ -219,8 +220,8 @@ class ConnectionFactory(object):
     logger = _getLogger(cls)
 
     logger.debug(
-      "Creating database connection policy: platform=%r; pymysql.VERSION=%r",
-      platform.system(), pymysql.VERSION)
+      "Creating database connection policy: platform=%r; psycopg2.VERSION=%r",
+      platform.system(), psycopg2.__version__)
 
     if platform.system() == "Java":
       # NOTE: PooledDB doesn't seem to work under Jython
@@ -299,7 +300,6 @@ class ConnectionWrapper(object):
 
       logger.debug("Acquired: %r; numOutstanding=%s",
                    self, self._clsNumOutstanding)
-
     except:
       logger.exception("Exception while instantiating %r;", self)
       # Clean up and re-raise
@@ -551,8 +551,14 @@ class PooledConnectionPolicy(DatabaseConnectionPolicyIface):
     self._logger.debug("Acquiring connection")
 
     dbConn = self._pool.connection(shareable=False)
+    try:
+        cursor = dbConn.cursor()
+    except psycopg2.Error as e:
+        self._logger.error("connection error %s" % (e))
+        dbConn = self._pool.connection(shareable=False)
+
     connWrap = ConnectionWrapper(dbConn=dbConn,
-                                 cursor=dbConn.cursor(),
+                                 cursor=cursor,
                                  releaser=self._releaseConnection,
                                  logger=self._logger)
     return connWrap
@@ -563,6 +569,8 @@ class PooledConnectionPolicy(DatabaseConnectionPolicyIface):
     ConnectionWrapper
     """
     self._logger.debug("Releasing connection")
+
+    dbConn.commit()
 
     # Close the cursor
     cursor.close()
@@ -645,15 +653,42 @@ def _getCommonSteadyDBArgsDict():
   constructor.
   """
 
+  from nupic.database.client_jobs_dao import ClientJobsDAO
+  dbname = ClientJobsDAO._getDBName()
+  print(dbname)
+  host = Configuration.get('nupic.cluster.database.host')
+  port = int(Configuration.get('nupic.cluster.database.port'))
+  user = Configuration.get('nupic.cluster.database.user')
+  password = Configuration.get('nupic.cluster.database.passwd')
+
+  os.environ['PGPASSWORD'] = password
+  command = "SELECT 1 FROM pg_database WHERE datname= '%s'" % (dbname)
+  args = ['psql','-At', '-U', user,  '-d', 'postgres', '-h', host, '-p', str(port), '-c', command]
+  proc = Popen(args, stdout=PIPE, stderr=PIPE)
+  out, err = proc.communicate()
+  if out == b'1\n':
+      print("database exists")
+  else:
+      print("create database")
+      command = 'CREATE DATABASE %s' % (dbname)
+      call(['psql','-U', user,  '-d', 'postgres', '-h', host, '-p', str(port), '-c', command])
+
   return dict(
-      creator = pymysql,
-      host = Configuration.get('nupic.cluster.database.host'),
-      port = int(Configuration.get('nupic.cluster.database.port')),
-      user = Configuration.get('nupic.cluster.database.user'),
-      passwd = Configuration.get('nupic.cluster.database.passwd'),
-      charset = 'utf8',
-      use_unicode = True,
-      setsession = ['SET AUTOCOMMIT = 1'])
+      creator = psycopg2,
+      ping = 7,
+      maxusage = 1,
+      dbname = dbname,
+      host = host,
+      port = port,
+      user = user,
+      password = password,
+      connect_timeout = 0,
+      client_encoding = 'utf-8',
+      keepalives_idle = 2,
+      keepalives_interval = 2
+      #setsession = ['SET AUTOCOMMIT TO ON']
+      #use_unicode = True,
+      )
 
 
 

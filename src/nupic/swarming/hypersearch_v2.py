@@ -179,6 +179,7 @@ class ResultsDB(object):
       else:
         errScore = metricResult
 
+      self._hsObj.logger.info("emma update model %s : errScore %g", modelID, errScore)
       if errScore < self._bestResult:
         self._bestResult = errScore
         self._bestModelID = modelID
@@ -289,6 +290,7 @@ class ResultsDB(object):
     # Update the swarm best score
     if not hidden:
       swarmId = modelParams['particleState']['swarmId']
+      self._hsObj.logger.info("emma swarmBestOverall %s %s %g" %(swarmId, self._swarmBestOverall, errScore))
       if not swarmId in self._swarmBestOverall:
         self._swarmBestOverall[swarmId] = []
 
@@ -617,6 +619,7 @@ class ResultsDB(object):
                                 self.getParticleInfos(swarmId, genIdx)
       maturedFlags = numpy.array(maturedFlags)
       numMatured = maturedFlags.sum()
+      self._hsObj.logger.info("emma matured flags: %s, %s, %d, %d" % (swarmId, maturedFlags, numMatured, self._hsObj._minParticlesPerSwarm))
       if numMatured >= self._hsObj._minParticlesPerSwarm \
             and numMatured == len(maturedFlags):
         errScores = numpy.array(errScores)
@@ -624,6 +627,7 @@ class ResultsDB(object):
 
         self._maturedSwarmGens.add(key)
         self._modifiedSwarmGens.remove(key)
+        self._hsObj.logger.info("emma maturedSwarmGens: %s, %d, %s" % (swarmId, genIdx, errScores))
         result.append((swarmId, genIdx, bestScore))
 
     # Return results
@@ -859,7 +863,6 @@ class HypersearchV2(object):
     # Instantiate our logger
     self.logger = logging.getLogger(".".join( ['com.numenta',
                         self.__class__.__module__, self.__class__.__name__]))
-
     # Override log level?
     if logLevel is not None:
       self.logger.setLevel(logLevel)
@@ -1486,10 +1489,10 @@ class HypersearchV2(object):
       # Change the model hash and params hash as stored in the models table so
       #  that we can insert a new model with the same paramsHash
       for attempt in range(100):
-        paramsHash = hashlib.md5("OrphanParams.%d.%d" % (orphanedModelId,
-                                                         attempt)).digest()
-        particleHash = hashlib.md5("OrphanParticle.%d.%d" % (orphanedModelId,
-                                                          attempt)).digest()
+        paramsHash = hashlib.md5(("OrphanParams.%d.%d" % (orphanedModelId,
+                                                         attempt)).encode('utf-8')).digest()
+        particleHash = hashlib.md5(("OrphanParticle.%d.%d" % (orphanedModelId,
+                                                          attempt)).encode('utf-8')).digest()
         try:
           self._cjDAO.modelSetFields(orphanedModelId,
                                    dict(engParamsHash=paramsHash,
@@ -1669,20 +1672,21 @@ class HypersearchV2(object):
         jobResultsStr = self._cjDAO.jobGetFields(self._jobID, ['results'])[0]
         if jobResultsStr is not None:
           jobResults = json.loads(jobResultsStr)
+          self.logger.info("emma jobResults %s" % (jobResults))
           bestModelId = jobResults.get('bestModel', None)
         else:
           bestModelId = None
 
         for swarmId in list(completedSwarms):
-          (_, modelIds, _, _, _) = self._resultsDB.getParticleInfos(
+          (particleStates, modelIds, errScores, _, _) = self._resultsDB.getParticleInfos(
                                           swarmId=swarmId, completed=False)
           if bestModelId in modelIds:
             modelIds.remove(bestModelId)
           if len(modelIds) == 0:
             continue
-          self.logger.info("Killing the following models in swarm '%s' because"
-                           "the swarm is being terminated: %s" % (swarmId,
-                           str(modelIds)))
+          self.logger.info("Killing the following models in swarm '%s' because "
+                           "the swarm is being terminated: %s %s %s" % (swarmId,
+                           str(modelIds), particleStates, errScores))
 
           for modelId in modelIds:
             self._cjDAO.modelSetFields(modelId,

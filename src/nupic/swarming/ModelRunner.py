@@ -419,6 +419,9 @@ class OPFModelRunner(object):
     # =========================================================================
     if self._predictionLogger:
       self._predictionLogger.close()
+    
+    if self._inputSource:
+        self._inputSource.close()
 
 
   def __createModelCheckpoint(self):

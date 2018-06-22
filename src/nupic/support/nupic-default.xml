@@ -65,26 +65,26 @@
 
 <property>
   <name>nupic.cluster.database.host</name>
-  <value>35.197.188.29</value>
-  <description>Name of the machine running the MySQL database server</description>
+  <value>agdcdev-db.nci.org.au</value>
+  <description>Name of the machine running the Postgre database server</description>
 </property>
 
 <property>
   <name>nupic.cluster.database.user</name>
-  <value>root</value>
-  <description>Username for the MySQL database server </description>
+  <value>ea6141</value>
+  <description>Username for the Postgre database server </description>
 </property>
 
 <property>
   <name>nupic.cluster.database.port</name>
-  <value>3306</value>
-  <description>Port number for the MySQL database server </description>
+  <value>6432</value>
+  <description>Port number for the Postgre database server </description>
 </property>
 
 <property>
   <name>nupic.cluster.database.passwd</name>
   <value>acs12345</value>
-  <description>Password for the MySQL database server </description>
+  <description>Password for the Postgre database server </description>
 </property>
 
 <property>
@@ -106,7 +106,7 @@
 <!--Hypersearch parameters-->
 <property>
   <name>nupic.hypersearch.minParticlesPerSwarm</name>
-  <value>5</value>
+  <value>10</value>
   <description>The minimum number of particles to create per swarm
   </description>
 </property>
@@ -128,7 +128,7 @@
 
 <property>
   <name>nupic.hypersearch.max.field.branching</name>
-  <value>5</value>
+  <value>8</value>
   <description>If > 0 at every sprint only the top n fields from the pair
   sprint will be appended to the best model from the previous sprint. Usefull
   feature for datasets with many fields. Also limits the maximum number of fields
@@ -138,7 +138,7 @@
 
 <property>
   <name>nupic.hypersearch.min.field.contribution</name>
-  <value>0.2</value>
+  <value>0</value>
   <description>When adding fields in sprints only looks at fields that by themselves
   contribute at least by n percent to improving the error
   </description>

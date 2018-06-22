@@ -754,8 +754,8 @@ def sortedJSONDumpS(obj):
     for key, value in items:
       itemStrs.append('%s: %s' % (json.dumps(key), sortedJSONDumpS(value)))
     return '{%s}' % (', '.join(itemStrs))
-
-  elif isinstance(obj, list):
+  
+  elif hasattr(obj, '__iter__') and not isinstance(obj, str):
     for val in obj:
       itemStrs.append(sortedJSONDumpS(val))
     return '[%s]' % (', '.join(itemStrs))

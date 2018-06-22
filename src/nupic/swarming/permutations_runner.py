@@ -376,7 +376,6 @@ def _clientJobsDB():
   return cjdao.ClientJobsDAO.get()
 
 
-
 def _nupicHyperSearchHasErrors(hyperSearchJob):
   """Check whether any experiments failed in our latest hypersearch
 
@@ -448,7 +447,15 @@ class _HyperSearchRunner(object):
     self.__searchJob = self.loadSavedHyperSearchJob(
       permWorkDir=self._options["permWorkDir"],
       outputLabel=self._options["outputLabel"])
+    jobID = self.__searchJob.getJobID()
 
+    cmdLine = _setUpExports(self._options["exports"])
+    cmdLine += "$HYPERSEARCH"
+    maxWorkers = self._options["maxWorkers"]
+
+    cmdLine = "python -m nupic.swarming.hypersearch_worker" \
+               " --jobID=%d" % (jobID)
+    self._launchWorkers(cmdLine, maxWorkers)
 
     self.monitorSearchJob()
 
@@ -628,6 +635,8 @@ class _HyperSearchRunner(object):
     for i in range(numWorkers):
       stdout = tempfile.NamedTemporaryFile(delete=False)
       stderr = tempfile.NamedTemporaryFile(delete=False)
+      print("emma stdout", stdout.name)
+      print("emma stderr", stderr.name)
       p = subprocess.Popen(cmdLine, bufsize=1, env=os.environ, shell=True,
                            stdin=None, stdout=stdout, stderr=stderr)
       p._stderr_file = stderr
@@ -943,10 +952,14 @@ class _HyperSearchRunner(object):
       print("0 experiments total.")
 
     # Print out the field contributions
-    print()
+    #print()
     global gCurrentSearch
-    jobStatus = hyperSearchJob.getJobStatus(gCurrentSearch._workers)
-    jobResults = jobStatus.getResults()
+    if gCurrentSearch is not None:
+        jobStatus = hyperSearchJob.getJobStatus(gCurrentSearch._workers)
+        jobResults = jobStatus.getResults()
+    else:
+        jobResults = results
+
     if "fieldContributions" in jobResults:
       print("Field Contributions:")
       pprint.pprint(jobResults["fieldContributions"], indent=4)
@@ -1045,6 +1058,7 @@ class _HyperSearchRunner(object):
     jobID = cls.__loadHyperSearchJobID(permWorkDir=permWorkDir,
                                        outputLabel=outputLabel)
 
+    
     searchJob = _HyperSearchJob(nupicJobID=jobID)
     return searchJob
 
@@ -1089,7 +1103,7 @@ class _HyperSearchRunner(object):
                                                  outputLabel=outputLabel)
 
     jobID = None
-    with open(filePath, "r") as jobIdPickleFile:
+    with open(filePath, "rb") as jobIdPickleFile:
       jobInfo = pickle.load(jobIdPickleFile)
       jobID = jobInfo["hyperSearchJobID"]
 
