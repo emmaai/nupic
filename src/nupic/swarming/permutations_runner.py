@@ -29,6 +29,9 @@ from datetime import datetime, timedelta
 import pickle as pickle
 import time
 import subprocess
+import numpy
+import sys
+from mpi4py import MPI
 
 from nupic.swarming.hypersearch import object_json as json
 
@@ -421,6 +424,7 @@ class _HyperSearchRunner(object):
     # will stay as None, otherwise it becomes an array of subprocess Popen
     # instances.
     self._workers = None
+    self._comm = None
 
     return
 
@@ -448,13 +452,10 @@ class _HyperSearchRunner(object):
       permWorkDir=self._options["permWorkDir"],
       outputLabel=self._options["outputLabel"])
     jobID = self.__searchJob.getJobID()
-
-    cmdLine = _setUpExports(self._options["exports"])
-    cmdLine += "$HYPERSEARCH"
     maxWorkers = self._options["maxWorkers"]
-
     cmdLine = "python -m nupic.swarming.hypersearch_worker" \
-               " --jobID=%d" % (jobID)
+               " --jobID=%d --resetJobStatus --redirect" % (jobID)
+
     self._launchWorkers(cmdLine, maxWorkers)
 
     self.monitorSearchJob()
@@ -494,7 +495,8 @@ class _HyperSearchRunner(object):
 
     hyperSearchFinished = False
     while not hyperSearchFinished:
-      jobInfo = self.__searchJob.getJobStatus(self._workers)
+      print("get job info")
+      jobInfo = self.__searchJob.getJobStatus(self._comm, self._workers)
 
       # Check for job completion BEFORE processing models; NOTE: this permits us
       # to process any models that we may not have accounted for in the
@@ -617,7 +619,7 @@ class _HyperSearchRunner(object):
     print("Evaluated %s models" % len(modelIDs))
     print("HyperSearch finished!")
 
-    jobInfo = self.__searchJob.getJobStatus(self._workers)
+    jobInfo = self.__searchJob.getJobStatus(self._comm, self._workers)
     print("Worker completion message: %s" % (jobInfo.getWorkerCompletionMsg()))
 
 
@@ -632,18 +634,18 @@ class _HyperSearchRunner(object):
     """
 
     self._workers = []
-    for i in range(numWorkers):
-      stdout = tempfile.NamedTemporaryFile(delete=False)
-      stderr = tempfile.NamedTemporaryFile(delete=False)
-      print("emma stdout", stdout.name)
-      print("emma stderr", stderr.name)
-      p = subprocess.Popen(cmdLine, bufsize=1, env=os.environ, shell=True,
-                           stdin=None, stdout=stdout, stderr=stderr)
-      p._stderr_file = stderr
-      p._stdout_file = stdout
-      self._workers.append(p)
 
+    args = cmdLine.split(' ')
+    comm = MPI.COMM_SELF.Spawn(sys.executable,
+                                args=args[1:],
+                                maxprocs=numWorkers)
 
+    comm = comm.Merge()
+    size = comm.Get_size()
+
+    self._comm = comm
+    for i in range(1, size):
+      self._workers.append(i)
 
   def __startSearch(self):
     """Starts HyperSearch as a worker or runs it inline for the "dryRun" action
@@ -682,7 +684,7 @@ class _HyperSearchRunner(object):
         jobType=self.__cjDAO.JOB_TYPE_HS)
 
       cmdLine = "python -m nupic.swarming.hypersearch_worker" \
-                 " --jobID=%d" % (jobID)
+                 " --jobID=%d --redirect" % (jobID)
       self._launchWorkers(cmdLine, maxWorkers)
 
     searchJob = _HyperSearchJob(jobID)
@@ -955,7 +957,7 @@ class _HyperSearchRunner(object):
     #print()
     global gCurrentSearch
     if gCurrentSearch is not None:
-        jobStatus = hyperSearchJob.getJobStatus(gCurrentSearch._workers)
+        jobStatus = hyperSearchJob.getJobStatus(gCurrentSearch._comm, gCurrentSearch._workers)
         jobResults = jobStatus.getResults()
     else:
         jobResults = results
@@ -1398,7 +1400,7 @@ class _NupicJob(object):
 
 
 
-  def getJobStatus(self, workers):
+  def getJobStatus(self, comm, workers):
     """
     Parameters:
     ----------------------------------------------------------------------
@@ -1407,7 +1409,7 @@ class _NupicJob(object):
     retval:         _NupicJob.JobStatus instance
 
     """
-    jobInfo = self.JobStatus(self.__nupicJobID, workers)
+    jobInfo = self.JobStatus(self.__nupicJobID, comm, workers)
     return jobInfo
 
 
@@ -1444,9 +1446,10 @@ class _NupicJob(object):
     __nupicJobStatus_Starting    = cjdao.ClientJobsDAO.STATUS_STARTING
     __nupicJobStatus_running     = cjdao.ClientJobsDAO.STATUS_RUNNING
     __nupicJobStatus_completed   = cjdao.ClientJobsDAO.STATUS_COMPLETED
+    __runningCount = -1 
 
 
-    def __init__(self, nupicJobID, workers):
+    def __init__(self, nupicJobID, comm, workers):
       """_NupicJob.JobStatus Constructor
 
       Parameters:
@@ -1462,19 +1465,25 @@ class _NupicJob(object):
 
       # If we launched the workers ourself, set the job status based on the
       #  workers that are still running
-      if workers is not None:
-        runningCount = 0
+      if workers is not None and comm is not None:
+        rbuf = numpy.array([-1], dtype='int')
+        if _NupicJob.JobStatus.__runningCount == -1:
+            _NupicJob.JobStatus.__runningCount = len(workers)
         for worker in workers:
-          retCode = worker.poll()
-          if retCode is None:
-            runningCount += 1
-        if runningCount > 0:
+            res = comm.Iprobe(source=worker, tag=11)
+            if res == True:
+                req = comm.Recv([rbuf, MPI.INT], source=worker, tag=11)
+                print("worker id", worker)
+                _NupicJob.JobStatus.__runningCount -= 1
+                print("running job", _NupicJob.JobStatus.__runningCount)
+                if rbuf[0] > 0:
+                    _emit(Verbosity.WARNING, "Job %d failed with error: %s" % (jobInfo.jobId, worker))
+                rbuf[0] = -1 
+
+        if _NupicJob.JobStatus.__runningCount > 0:
           status = cjdao.ClientJobsDAO.STATUS_RUNNING
-        else:
+        elif _NupicJob.JobStatus.__runningCount == 0:
           status = cjdao.ClientJobsDAO.STATUS_COMPLETED
-          if retCode != 0:
-            with open(worker._stderr_file.name, 'r') as err:
-              _emit(Verbosity.WARNING, "Job %d failed with error: %s" % (jobInfo.jobId, err.read()))
         jobInfo = jobInfo._replace(status=status)
 
       _emit(Verbosity.DEBUG, "JobStatus: \n%s" % pprint.pformat(jobInfo,

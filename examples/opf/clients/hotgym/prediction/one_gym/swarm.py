@@ -70,14 +70,16 @@ def writeModelParamsToFile(modelParams, name):
 
 
 
-def swarmForBestModelParams(swarmConfig, name, maxWorkers=10):
+
+def swarmForBestModelParams(swarmConfig, name, maxWorkers=7):
+
   outputLabel = name
   permWorkDir = os.path.abspath('swarm')
   if not os.path.exists(permWorkDir):
     os.mkdir(permWorkDir)
   modelParams = permutations_runner.runWithConfig(
     swarmConfig,
-    {"maxWorkers": maxWorkers, "overwrite": True},
+    {"maxWorkers": maxWorkers, "overwrite": True, "action":"pickup"},
     outputLabel=outputLabel,
     outDir=permWorkDir,
     permWorkDir=permWorkDir,

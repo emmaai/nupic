@@ -2481,7 +2481,7 @@ class ClientJobsDAO(object):
     for r in rows:
         res = self._models.modelInfoNamedTuple._make(r)
         res = res._replace(engParamsHash=bytes(res.engParamsHash))
-        res = res._replace(engParticleHash=bytes(res.engParticlesHash))
+        res = res._replace(engParticleHash=bytes(res.engParticleHash))
         results.append(res)
 
     # NOTE: assetion will also fail if modelIDs contains duplicates

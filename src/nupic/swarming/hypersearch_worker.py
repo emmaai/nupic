@@ -32,6 +32,8 @@ import io
 import traceback
 import tempfile
 import nupic
+import numpy
+from mpi4py import MPI
 nupic_path = [p+"/nupic" for p in sys.path if "nupic" in p]
 nupic.__path__ = nupic_path
 
@@ -541,17 +543,22 @@ def main(argv):
     raise RuntimeError("Either --jobID or --params must be specified.")
 
   if options.redirect is True:
-      sys.stdout = tempfile.NamedTemporaryFile(mode='w', delete=False)
-      sys.stderr = tempfile.NamedTemporaryFile(mode='w', delete=False)
+    stdout = tempfile.NamedTemporaryFile(mode='w', delete=False)
+    stderr = tempfile.NamedTemporaryFile(mode='w', delete=False)
+    print("emma stdout", stdout.name)
+    print("emma stderr", stderr.name)
+    sys.stdout = stdout
+    sys.stderr = stderr
 
   initLogging(verbose=True)
-
-  # Instantiate the HypersearchWorker and run it
+  
+    # Instantiate the HypersearchWorker and run it
   hst = HypersearchWorker(options, argv[1:])
 
   # Normal use. This is one of among a number of workers. If we encounter
   #  an exception at the outer loop here, we fail the entire job.
   if options.params is None:
+    
     try:
       jobID = hst.run()
 
@@ -578,6 +585,7 @@ def main(argv):
             useConnectionID=False,
             ignoreUnchanged=True)
 
+    
 
   # Run just 1 worker for the entire job. Used for unit tests that run in
   # 1 process
@@ -600,7 +608,7 @@ def main(argv):
                               completionReason=completionReason,
                               completionMsg=completionMsg)
 
-  return jobID
+    return jobID
 
 
 def dask_main(argv):
@@ -620,10 +628,17 @@ if __name__ == "__main__":
   buildID = Configuration.get('nupic.software.buildNumber', 'N/A')
   logPrefix = '<BUILDID=%s, WORKER=HS, WRKID=N/A, JOBID=N/A> ' % buildID
   ExtendedLogger.setLogPrefix(logPrefix)
+  comm = MPI.Comm.Get_parent()
+  comm = comm.Merge(True)
 
   try:
     main(sys.argv)
   except:
     logging.exception("HypersearchWorker is exiting with unhandled exception; "
                       "argv=%r", sys.argv)
+    sbuf = numpy.array(1, 'int')
+    comm.Send([sbuf, MPI.INT], dest=0, tag=11)
     raise
+  else:
+    sbuf = numpy.array(0, 'int')
+    comm.Send([sbuf, MPI.INT], dest=0, tag=11)
