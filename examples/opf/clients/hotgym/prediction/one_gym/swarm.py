@@ -68,9 +68,6 @@ def writeModelParamsToFile(modelParams, name):
     outFile.write("MODEL_PARAMS = \\\n%s" % modelParamsString)
   return outPath
 
-
-
-
 def swarmForBestModelParams(swarmConfig, name, maxWorkers=7):
 
   outputLabel = name

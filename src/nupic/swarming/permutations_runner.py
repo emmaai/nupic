@@ -453,6 +453,7 @@ class _HyperSearchRunner(object):
       outputLabel=self._options["outputLabel"])
     jobID = self.__searchJob.getJobID()
     maxWorkers = self._options["maxWorkers"]
+
     cmdLine = "python -m nupic.swarming.hypersearch_worker" \
                " --jobID=%d --resetJobStatus --redirect" % (jobID)
 
@@ -634,6 +635,18 @@ class _HyperSearchRunner(object):
     """
 
     self._workers = []
+    args = cmdLine.split(' ')
+    comm = MPI.COMM_SELF.Spawn(sys.executable,
+                                args=args[1:],
+                                maxprocs=numWorkers)
+
+    comm = comm.Merge()
+    size = comm.Get_size()
+
+    self._comm = comm
+
+    for i in range(1, size):
+      self._workers.append(i)
 
     args = cmdLine.split(' ')
     comm = MPI.COMM_SELF.Spawn(sys.executable,
